@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ProShareRoom, type ChatMsg, type IncomingFile, type PeerInfo } from '../lib/room'
+import { ProShareRoom, peerMutual, type ChatMsg, type IncomingFile, type PeerInfo } from '../lib/room'
 import { MAX_TEXT_CHARS, formatBytes, saveBlob } from '../lib/files'
 import { Card } from '../components/Chrome'
 import { ProgressBar } from '../components/ProgressBar'
@@ -15,9 +15,6 @@ export function Join({ roomCode }: { roomCode: string }) {
   const [text, setText] = useState('')
   const [notice, setNotice] = useState<string | null>(null)
   const [noHostHint, setNoHostHint] = useState(false)
-  const [confirmed, setConfirmed] = useState(false)
-  const confirmedRef = useRef(false)
-  const heldSaves = useRef<IncomingFile[]>([])
   const roomRef = useRef<ProShareRoom | null>(null)
 
   const connect = useCallback(() => {
@@ -30,12 +27,10 @@ export function Join({ roomCode }: { roomCode: string }) {
       onFileProgress: (id, progress) => setFiles(fs => fs.map(x => x.meta.id === id ? { ...x, progress } : x)),
       onFileDone: f => {
         setFiles(fs => fs.map(x => x.meta.id === f.meta.id ? f : x))
-        // Files are not saved until the receiver confirms the verification
-        // code - the confirmation is what authenticates the connection.
-        if (f.status === 'done' && f.data) {
-          if (confirmedRef.current) saveBlob(f.data, f.meta.name, f.meta.type)
-          else heldSaves.current.push(f)
-        }
+        // The protocol layer drops all content until both sides confirmed
+        // the verification code, so a completed file here is authenticated
+        // and can be saved straight away.
+        if (f.status === 'done' && f.data) saveBlob(f.data, f.meta.name, f.meta.type)
       },
       onText: m => setChat(c => [...c.slice(-99), m]),
       onError: setNotice,
@@ -125,19 +120,20 @@ export function Join({ roomCode }: { roomCode: string }) {
     <div className="fade-up flex flex-col gap-5">
       <div className="flex flex-col gap-1">
         <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Connected to {host ? host.name : 'host'}</h1>
-        {host && confirmed && (
-        <p className="text-sm text-[--color-mut]">Verification code <span className="mono text-[--color-brand2]">{host.code}</span> confirmed. You can receive files and reply below.</p>
+        {host && peerMutual(host) && (
+        <p className="text-sm text-[--color-mut]">Verification code <span className="mono text-[--color-brand2]">{host.code}</span> confirmed on both sides. You can receive files and reply below.</p>
+      )}
+        {host && host.localConfirmed && !host.remoteConfirmed && (
+        <p className="text-sm text-[--color-warn]">You confirmed the code. Nothing can be shared until the sender confirms it on their side too.</p>
       )}
 
-      {host && !confirmed && (
+      {host && !host.localConfirmed && (
         <Card className="pulse-ring border-[--color-brand]">
           <div className="font-semibold text-lg mb-1">Before anything is shared</div>
-          <p className="text-sm text-[--color-mut] mb-2">Compare this code with the sender's screen over a call or another chat. It is fresh for this connection - if anyone is in the middle, the codes will not match.</p>
+          <p className="text-sm text-[--color-mut] mb-2">Compare this code with the sender's screen over a call or another chat. It is fresh for this connection, and the comparison protects against interception - if the codes differ, do not continue.</p>
           <div className="mono text-3xl font-bold tracking-[0.2em] text-[--color-brand2] mb-3">{host.code}</div>
           <button className="btn btn-ok w-full" onClick={() => {
-            confirmedRef.current = true
-            setConfirmed(true)
-            for (const f of heldSaves.current.splice(0)) { if (f.data) saveBlob(f.data, f.meta.name, f.meta.type) }
+            roomRef.current?.confirmPeer(host.id).catch(() => setNotice('Could not send confirmation - the connection may have dropped.'))
           }}>The codes match</button>
         </Card>
       )}
@@ -160,8 +156,7 @@ export function Join({ roomCode }: { roomCode: string }) {
               <div key={f.meta.id} className="text-sm space-y-1">
                 <div className="flex justify-between gap-3">
                   <span className="truncate">{f.meta.name}</span>
-                  {f.status === 'done' && !confirmed ? <span className="pill pill-warn shrink-0">received &middot; verified &middot; confirm code to save</span>
-                    : f.status === 'done' ? <span className="pill pill-ok shrink-0">received &middot; verified</span>
+                  {f.status === 'done' ? <span className="pill pill-ok shrink-0">received &middot; verified</span>
                     : f.status === 'failed' ? <span className="pill pill-bad shrink-0">failed</span>
                     : f.status === 'verifying' ? <span className="pill pill-warn shrink-0">verifying</span>
                     : <span className="text-[--color-mut] shrink-0">{Math.round(f.progress * 100)}%</span>}
@@ -190,7 +185,7 @@ export function Join({ roomCode }: { roomCode: string }) {
           <input className="field" placeholder="Type a message&hellip;" value={text} maxLength={MAX_TEXT_CHARS}
             onChange={e => setText(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') sendText() }} />
-          <button className="btn btn-primary" onClick={sendText} disabled={!text.trim() || !confirmed}>Send</button>
+          <button className="btn btn-primary" onClick={sendText} disabled={!text.trim() || !host || !peerMutual(host)}>Send</button>
         </div>
       </Card>
     </div>

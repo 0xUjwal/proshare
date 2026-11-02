@@ -6,6 +6,11 @@
 //  - all transfer metadata inside the authenticated envelope
 //  - fresh random 96-bit nonces per message
 // Composition is standard primitives but unreviewed - see README.
+//
+// Mutual confirmation gate: no content (file or text) is sealed or accepted
+// until BOTH sides have confirmed the out-of-band verification code. The
+// confirmation itself is an authenticated control message in the same
+// sequence, bound to the session by the AEAD key and the code it carries.
 
 import { open, openRaw, seal, sealRaw, type SessionKeys } from './crypto'
 import { MAX_FILE_BYTES, MAX_TEXT_CHARS, sanitizeFilename } from './files'
@@ -25,17 +30,39 @@ export interface FileMeta {
 
 export type WireMeta = { id: string; k: 'm' } | { id: string; k: 'c'; i: number }
 
+// Shared per-session confirmation state. The app sets `local` when its own
+// user presses the match button; `remote` is set only by an authenticated
+// confirm control message from the peer. Content flows only when both hold.
+export interface ConfirmGate { local: boolean; remote: boolean }
+export const newGate = (): ConfirmGate => ({ local: false, remote: false })
+const mutual = (g: ConfirmGate): boolean => g.local && g.remote
+
 export class ContentSender {
   private sendSeq = 0
   private keys: SessionKeys
-  constructor(keys: SessionKeys) { this.keys = keys }
+  private gate: ConfirmGate
+  constructor(keys: SessionKeys, gate: ConfirmGate) { this.keys = keys; this.gate = gate }
+
+  // Local user confirmed the verification code: seal the authenticated
+  // confirm control message for the peer. Carries the code itself so a
+  // confirm cannot be transplanted from another session.
+  async sealConfirm(): Promise<string> {
+    this.gate.local = true
+    return seal(this.keys.sendKey, { s: ++this.sendSeq, t: 'confirm', v: this.keys.verifyCode })
+  }
+
+  private assertMutual(): void {
+    if (!mutual(this.gate)) throw new Error('blocked: both sides must confirm the verification code before anything is sent')
+  }
 
   async sealFileMeta(meta: FileMeta, n: number): Promise<{ data: string; wire: WireMeta }> {
+    this.assertMutual()
     const data = await seal(this.keys.sendKey, { s: ++this.sendSeq, t: 'meta', id: meta.id, name: meta.name, size: meta.size, type: meta.type, sha256: meta.sha256, n })
     return { data, wire: { id: meta.id, k: 'm' } }
   }
 
   async sealChunk(id: string, i: number, chunk: Uint8Array): Promise<{ data: string; wire: WireMeta }> {
+    this.assertMutual()
     const seq = this.sendSeq + 1
     const ad = new TextEncoder().encode(JSON.stringify({ s: seq, id, i }))
     const data = await sealRaw(this.keys.sendKey, chunk, ad)
@@ -44,6 +71,7 @@ export class ContentSender {
   }
 
   async sealText(id: string, text: string, ts: number): Promise<string> {
+    this.assertMutual()
     return seal(this.keys.sendKey, { s: ++this.sendSeq, t: 'text', id, text, ts })
   }
 
@@ -55,6 +83,7 @@ export type ReceiveEvent =
   | { type: 'progress'; id: string; progress: number }
   | { type: 'file'; meta: FileMeta; data: ArrayBuffer }
   | { type: 'text'; id: string; text: string; ts: number }
+  | { type: 'confirm' }
   | { type: 'drop' }
 
 interface Reassembling { meta: FileMeta; chunks: (Uint8Array | undefined)[]; got: number; total: number }
@@ -63,11 +92,29 @@ export class ContentReceiver {
   private recvSeq = 0
   private incoming = new Map<string, Reassembling>()
   private keys: SessionKeys
-  constructor(keys: SessionKeys) { this.keys = keys }
+  private gate: ConfirmGate
+  constructor(keys: SessionKeys, gate: ConfirmGate) { this.keys = keys; this.gate = gate }
+
+  // Authenticated confirm control from the peer. Shares the per-direction
+  // sequence with content, so a confirm replayed or transplanted is dropped.
+  async acceptControl(data: unknown): Promise<ReceiveEvent[]> {
+    if (typeof data !== 'string') return [{ type: 'drop' }]
+    try {
+      const m = (await open(this.keys.recvKey, data)) as Record<string, unknown>
+      if (m.s !== this.recvSeq + 1 || m.t !== 'confirm' || m.v !== this.keys.verifyCode) return [{ type: 'drop' }]
+      this.recvSeq = m.s as number
+      this.gate.remote = true
+      return [{ type: 'confirm' }]
+    } catch {
+      return [{ type: 'drop' }]
+    }
+  }
 
   // One entry point for every sealed payload. Anything unauthentic,
-  // out of sequence, replayed or malformed is dropped.
+  // out of sequence, replayed, malformed - or arriving before both sides
+  // confirmed the verification code - is dropped, never buffered.
   async acceptFileMessage(data: unknown, wm: Partial<WireMeta>): Promise<ReceiveEvent[]> {
+    if (!mutual(this.gate)) return [{ type: 'drop' }]
     if (typeof data !== 'string' || !wm || typeof wm.id !== 'string' || (wm.k !== 'm' && wm.k !== 'c')) return [{ type: 'drop' }]
     try {
       if (wm.k === 'm') {
@@ -107,6 +154,7 @@ export class ContentReceiver {
   }
 
   async acceptText(data: unknown): Promise<ReceiveEvent[]> {
+    if (!mutual(this.gate)) return [{ type: 'drop' }]
     if (typeof data !== 'string') return [{ type: 'drop' }]
     try {
       const m = (await open(this.keys.recvKey, data)) as Record<string, unknown>

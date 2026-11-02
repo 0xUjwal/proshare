@@ -18,7 +18,7 @@
 //    connection metadata (IPs, timing). Never file contents.
 import { joinRoom, selfId, type MessageAction, type Room } from 'trystero'
 import { deriveSessionKeys, exportPub, generateKxPair, open, seal, sha256Hex, type SessionKeys } from './crypto'
-import { ContentReceiver, ContentSender, CHUNK_BYTES, chunkCount, MAX_WIRE_BYTES, type FileMeta } from './transfer'
+import { ContentReceiver, ContentSender, CHUNK_BYTES, chunkCount, MAX_WIRE_BYTES, newGate, type ConfirmGate, type FileMeta } from './transfer'
 import { MAX_TEXT_CHARS } from './files'
 
 export type { FileMeta } from './transfer'
@@ -32,7 +32,13 @@ export interface PeerInfo {
   role: Role
   code: string // out-of-band verification code for this pairing
   connectedAt: number
+  // Mutual confirmation: local = our user pressed the match button,
+  // remote = authenticated confirm control received from this peer.
+  // Content is sealed/accepted only when both are true.
+  localConfirmed: boolean
+  remoteConfirmed: boolean
 }
+export const peerMutual = (p: PeerInfo): boolean => p.localConfirmed && p.remoteConfirmed
 
 export interface PendingRequest {
   peerId: string
@@ -71,7 +77,7 @@ export class ProShareRoom {
   private rejected = new Set<string>()
   private pendingQueue: PendingRequest[] = []
   private pendingActive: PendingRequest | null = null
-  private sessions = new Map<string, { sender: ContentSender; receiver: ContentReceiver }>()
+  private sessions = new Map<string, { sender: ContentSender; receiver: ContentReceiver; gate: ConfirmGate }>()
   private ev: RoomEvents
   private closed = false
 
@@ -79,6 +85,8 @@ export class ProShareRoom {
   private sendFileAction: MessageAction<any>
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private textAction: MessageAction<any>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private ctrlAction: MessageAction<any>
 
   private constructor(role: Role, roomCode: string, ev: RoomEvents, myName: string) {
     this.role = role
@@ -142,12 +150,27 @@ export class ProShareRoom {
 
     this.sendFileAction = this.room.makeAction('file')
     this.textAction = this.room.makeAction('text')
+    this.ctrlAction = this.room.makeAction('ctrl')
 
     // Every content payload is AEAD-sealed under the pair's ECDH session key
     // (see transfer.ts): direction-separated keys, strict sequencing, all
     // metadata inside the envelope. A relay or active MITM without the session
     // key can drop messages but cannot read, alter, or forge them - and
     // dropping breaks the sequence, failing the transfer loudly.
+    this.ctrlAction.onReceive = ({ byteLength, peerId }) => {
+      return this.sessions.has(peerId) && typeof byteLength === 'number' && byteLength > 0 && byteLength <= 8192
+    }
+    this.ctrlAction.onMessage = async (data, { peerId }) => {
+      const sess = this.sessions.get(peerId)
+      if (!sess) return
+      for (const ev of await sess.receiver.acceptControl(data)) {
+        if (ev.type === 'confirm') {
+          const peer = this.peers.get(peerId)
+          if (peer) { peer.remoteConfirmed = true; this.emitPeers() }
+        }
+      }
+    }
+
     this.sendFileAction.onReceive = ({ byteLength, peerId }) => {
       if (!this.sessions.has(peerId)) return false
       return typeof byteLength === 'number' && byteLength > 0 && byteLength <= MAX_WIRE_BYTES
@@ -235,9 +258,24 @@ export class ProShareRoom {
   }
 
   private async addPeer(id: string, name: string, role: Role, session: SessionKeys) {
-    this.peers.set(id, { id, name, role, code: session.verifyCode, connectedAt: Date.now() })
-    this.sessions.set(id, { sender: new ContentSender(session), receiver: new ContentReceiver(session) })
+    this.peers.set(id, { id, name, role, code: session.verifyCode, connectedAt: Date.now(), localConfirmed: false, remoteConfirmed: false })
+    const gate = newGate()
+    this.sessions.set(id, { sender: new ContentSender(session, gate), receiver: new ContentReceiver(session, gate), gate })
     this.emitPeers()
+  }
+
+  // The local user confirmed the verification code for this peer. Marks the
+  // local half of the gate and sends the authenticated confirm control; the
+  // peer's matching control completes mutual confirmation. Content stays
+  // blocked at the protocol layer until both halves are set.
+  async confirmPeer(peerId: string): Promise<void> {
+    const sess = this.sessions.get(peerId)
+    const peer = this.peers.get(peerId)
+    if (!sess || !peer || peer.localConfirmed) return
+    const data = await sess.sender.sealConfirm()
+    peer.localConfirmed = true
+    this.emitPeers()
+    await this.ctrlAction.send(data, { target: peerId })
   }
 
   private emitPeers() {
@@ -251,6 +289,7 @@ export class ProShareRoom {
   async sendFile(peerId: string, file: File, meta: FileMeta, onProgress: (p: number) => void): Promise<void> {
     const sess = this.sessions.get(peerId)
     if (!sess) throw new Error('peer is not approved')
+    if (!(sess.gate.local && sess.gate.remote)) throw new Error('both sides must confirm the verification code before anything is sent')
     const buf = new Uint8Array(await file.arrayBuffer())
     const n = chunkCount(buf.length)
     const m = await sess.sender.sealFileMeta(meta, n)
@@ -268,6 +307,7 @@ export class ProShareRoom {
     for (const t of ids) {
       const sess = this.sessions.get(t)
       if (!sess) continue
+      if (!(sess.gate.local && sess.gate.remote)) throw new Error('both sides must confirm the verification code before anything is sent')
       await this.textAction.send(await sess.sender.sealText(crypto.randomUUID(), text, Date.now()), { target: t })
     }
   }

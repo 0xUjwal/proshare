@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ProShareRoom, type ChatMsg, type FileMeta, type PeerInfo, type PendingRequest } from '../lib/room'
+import { ProShareRoom, peerMutual, type ChatMsg, type FileMeta, type PeerInfo, type PendingRequest } from '../lib/room'
 import { randomToken, sha256Hex } from '../lib/crypto'
 import { MAX_FILE_BYTES, MAX_FILES, MAX_TEXT_CHARS, formatBytes } from '../lib/files'
 import { formatCode } from '../lib/codes'
@@ -18,11 +18,13 @@ export function Host({ roomCode }: { roomCode: string }) {
   const [chat, setChat] = useState<ChatMsg[]>([])
   const [notice, setNotice] = useState<string | null>(null)
   const [linkCopied, setLinkCopied] = useState(false)
-  const [verified, setVerified] = useState<Set<string>>(new Set())
   const [ended, setEnded] = useState(false)
   const [drag, setDrag] = useState(false)
   const [text, setText] = useState('')
   const roomRef = useRef<ProShareRoom | null>(null)
+
+  const guests = useMemo(() => peers.filter(p => p.role === 'guest'), [peers])
+
 
   useEffect(() => {
     const room = ProShareRoom.host(roomCode, {
@@ -37,9 +39,8 @@ export function Host({ roomCode }: { roomCode: string }) {
         // Another live host claimed the same code - tell the sender to pick another.
         if (/same-role/i.test(msg)) setNotice('That code is already in use by another open room. Go back and choose a different one.')
       },
-      onLeft: (id, role) => {
+      onLeft: (_id, role) => {
         if (role === 'guest') setNotice('A peer left the session.')
-        setVerified(v => { const n = new Set(v); n.delete(id); return n })
       },
     }, 'Host')
     roomRef.current = room
@@ -56,8 +57,9 @@ export function Host({ roomCode }: { roomCode: string }) {
   const sendAll = useCallback(async () => {
     const room = roomRef.current
     if (!room || !picked.length) return
-    const targets = room.approvedPeerIds().filter(id => verified.has(id))
-    if (!targets.length) { setNotice('No verified recipients yet. Compare the 6-digit code with your peer and confirm it matches first.'); return }
+    const mutualIds = guests.filter(peerMutual).map(g => g.id)
+    const targets = room.approvedPeerIds().filter(id => mutualIds.includes(id))
+    if (!targets.length) { setNotice('No verified recipients yet. Both sides must confirm the verification code first.'); return }
     const toSend = picked
     setPicked([])
     for (const file of toSend) {
@@ -78,16 +80,17 @@ export function Host({ roomCode }: { roomCode: string }) {
         })
       }
     }
-  }, [picked, peers, verified])
+  }, [picked, peers, guests])
 
   const sendText = useCallback(async () => {
     const t = text.trim()
     if (!t || !roomRef.current) return
     if (t.length > MAX_TEXT_CHARS) { setNotice(`Message too long (max ${MAX_TEXT_CHARS} chars).`); return }
     const msg: ChatMsg = { id: crypto.randomUUID(), from: roomRef.current.selfId, name: 'You', text: t, ts: Date.now() }
-    try { await roomRef.current.sendText(t, roomRef.current.approvedPeerIds().filter(id => verified.has(id))); setChat(c => [...c.slice(-99), msg]); setText('') }
-    catch { setNotice('Could not send - no verified recipients.') }
-  }, [text, verified])
+    const mutualIds = guests.filter(peerMutual).map(g => g.id)
+    try { await roomRef.current.sendText(t, roomRef.current.approvedPeerIds().filter(id => mutualIds.includes(id))); setChat(c => [...c.slice(-99), msg]); setText('') }
+    catch { setNotice('Could not send - both sides must confirm the verification code first.') }
+  }, [text, guests])
 
   const copyLink = useCallback(async () => {
     try { await navigator.clipboard.writeText(joinLink); setLinkCopied(true); setTimeout(() => setLinkCopied(false), 2000) }
@@ -98,8 +101,6 @@ export function Host({ roomCode }: { roomCode: string }) {
     roomRef.current?.leave()
     setEnded(true)
   }, [])
-
-  const guests = useMemo(() => peers.filter(p => p.role === 'guest'), [peers])
 
   if (ended) {
     return (
@@ -171,9 +172,11 @@ export function Host({ roomCode }: { roomCode: string }) {
                   <div className="font-semibold truncate">{p.name}</div>
                   <div className="text-xs text-[--color-mut]">verification code <span className="mono text-[--color-brand2] text-sm">{p.code}</span> - read it to them and check theirs matches</div>
                 </div>
-                {verified.has(p.id)
+                {peerMutual(p)
                   ? <span className="pill pill-ok">code confirmed</span>
-                  : <button className="btn btn-ok" onClick={() => setVerified(v => new Set(v).add(p.id))}>Codes match</button>}
+                  : p.localConfirmed
+                  ? <span className="pill pill-warn">waiting for them to confirm</span>
+                  : <button className="btn btn-ok" onClick={() => { roomRef.current?.confirmPeer(p.id).catch(() => setNotice('Could not send confirmation - the peer may have left.')) }}>Codes match</button>}
               </li>
             ))}
           </ul>
@@ -202,11 +205,11 @@ export function Host({ roomCode }: { roomCode: string }) {
                 <button className="text-[--color-mut] hover:text-white" onClick={() => setPicked(p => p.filter((_, j) => j !== i))} aria-label="remove">&#10005;</button>
               </div>
             ))}
-            <button className="btn btn-primary w-full mt-2" onClick={sendAll} disabled={guests.filter(g => verified.has(g.id)).length === 0}>
-              Send {picked.length} file{picked.length > 1 ? 's' : ''} to {guests.filter(g => verified.has(g.id)).length || 'no'} verified recipient{guests.filter(g => verified.has(g.id)).length === 1 ? '' : 's'}
+            <button className="btn btn-primary w-full mt-2" onClick={sendAll} disabled={guests.filter(peerMutual).length === 0}>
+              Send {picked.length} file{picked.length > 1 ? 's' : ''} to {guests.filter(peerMutual).length || 'no'} verified recipient{guests.filter(peerMutual).length === 1 ? '' : 's'}
             </button>
-            {guests.length > 0 && guests.every(g => !verified.has(g.id)) && (
-              <p className="text-xs text-[--color-warn] mt-2">Compare the 6-digit verification code with your recipient (call or another chat) and press "Codes match" before sending. This is what proves no one is in the middle.</p>
+            {guests.length > 0 && guests.filter(peerMutual).length === 0 && (
+              <p className="text-xs text-[--color-warn] mt-2">Compare the 6-digit verification code with your recipient (call or another chat) and press "Codes match". Nothing can be sent until both sides confirm - the comparison protects against interception.</p>
             )}
           </div>
         )}
@@ -244,7 +247,7 @@ export function Host({ roomCode }: { roomCode: string }) {
           <input className="field" placeholder="Type a message&hellip;" value={text} maxLength={MAX_TEXT_CHARS}
             onChange={e => setText(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') sendText() }} />
-          <button className="btn btn-primary" onClick={sendText} disabled={!text.trim() || guests.filter(g => verified.has(g.id)).length === 0}>Send</button>
+          <button className="btn btn-primary" onClick={sendText} disabled={!text.trim() || guests.filter(peerMutual).length === 0}>Send</button>
         </div>
       </Card>
     </div>
