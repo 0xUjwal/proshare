@@ -16,7 +16,7 @@
 //  - Signaling itself (SDP offers/answers) passes public Nostr relays in
 //    readable form: relays and anyone who guesses a live code can see
 //    connection metadata (IPs, timing). Never file contents.
-import { joinRoom, selfId, type MessageAction, type Room } from 'trystero'
+import { joinRoom, selfId, getRelaySockets, type MessageAction, type Room } from 'trystero'
 import { deriveSessionKeys, exportPub, generateKxPair, open, seal, sha256Hex, type SessionKeys } from './crypto'
 import { ContentReceiver, ContentSender, CHUNK_BYTES, chunkCount, MAX_WIRE_BYTES, newGate, type ConfirmGate, type FileMeta } from './transfer'
 import { MAX_TEXT_CHARS } from './files'
@@ -24,6 +24,22 @@ import { MAX_TEXT_CHARS } from './files'
 export type { FileMeta } from './transfer'
 
 export const APP_ID = 'proshare-p2p-v1'
+
+// Rendezvous relays. Trystero's default is a fixed shuffle of 5 public relays
+// for every app id; on 2 Nov 2026 several of those (stakey rate-limited,
+// hackshed/flashapp refused connections) were unhealthy, so everyone shared a
+// mostly-dead set. These were checked to accept connections and deliver an
+// event between two sockets. Signaling only - never carries contents.
+export const RELAY_URLS = [
+  'wss://relay.aarpia.com',
+  'wss://nostr.chaima.info',
+  'wss://relay.nostr.dev.br',
+  'wss://nostrcity-club.fly.dev',
+  'wss://nostr.christiansass.de',
+  'wss://bendernostur.duckdns.org:8443',
+]
+
+export interface Diagnostics { relaysOpen: number; relaysTotal: number; stage: string; error: string | null }
 export type Role = 'host' | 'guest'
 
 export interface PeerInfo {
@@ -80,6 +96,8 @@ export class ProShareRoom {
   private sessions = new Map<string, { sender: ContentSender; receiver: ContentReceiver; gate: ConfirmGate }>()
   private ev: RoomEvents
   private closed = false
+  private stage = 'looking for the other device'
+  private hsError: string | null = null
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private sendFileAction: MessageAction<any>
@@ -94,11 +112,13 @@ export class ProShareRoom {
     this.ev = ev
 
     this.room = joinRoom(
-      { appId: APP_ID, maxReceiveBytes: 1024 * 1024 * 1024 + 64 * 1024 * 1024 },
+      { appId: APP_ID, maxReceiveBytes: 1024 * 1024 * 1024 + 64 * 1024 * 1024, relayConfig: { urls: RELAY_URLS } },
       roomCode,
       {
         handshakeTimeoutMs: 120_000, // a human needs time to approve
         onPeerHandshake: async (peerId, send, receive, isInitiator) => {
+          this.stage = 'device found, exchanging keys'
+          this.hsError = null
           // 1. Ephemeral ECDH key exchange (fixed order: initiator first).
           const kx = await generateKxPair()
           const myPub = await exportPub(kx)
@@ -118,6 +138,7 @@ export class ProShareRoom {
           if (!h || h.t !== 'hello' || typeof h.name !== 'string') throw new Error('bad handshake')
           if (h.role === role) throw new Error('same-role peers are not allowed')
           const name = String(h.name).slice(0, 40) || 'Guest'
+          this.stage = role === 'host' ? 'request received' : 'request delivered, waiting for approval'
 
           if (role === 'host') {
             // A peer the host rejected keeps retrying at the relay level;
@@ -222,6 +243,17 @@ export class ProShareRoom {
       this.ev.onLeft(peerId, role)
       this.emitPeers()
     }
+  }
+
+  diagnostics(): Diagnostics {
+    let open = 0
+    let total = RELAY_URLS.length
+    try {
+      const socks = Object.values(getRelaySockets() as Record<string, { readyState?: number }>)
+      total = RELAY_URLS.length
+      open = socks.filter(x => x && x.readyState === 1).length
+    } catch { /* diagnostics only */ }
+    return { relaysOpen: open, relaysTotal: total, stage: this.stage, error: this.hsError }
   }
 
   static host(roomCode: string, ev: RoomEvents, name: string) {

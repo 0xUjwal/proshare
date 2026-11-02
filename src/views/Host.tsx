@@ -1,3 +1,4 @@
+import { Diag } from '../components/Diag'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ProShareRoom, peerMutual, type ChatMsg, type FileMeta, type PeerInfo, type PendingRequest } from '../lib/room'
 import { randomToken, sha256Hex } from '../lib/crypto'
@@ -162,7 +163,10 @@ export function Host({ roomCode }: { roomCode: string }) {
       <Card>
         <div className="text-xs font-semibold text-[--color-mut] uppercase tracking-wider mb-3">Connected ({guests.length})</div>
         {guests.length === 0 ? (
-          <p className="text-sm text-[--color-mut]">Waiting for someone to join&hellip; keep this tab open.</p>
+          <>
+            <p className="text-sm text-[--color-mut]">Waiting for someone to join&hellip; keep this tab open.</p>
+            <Diag get={() => roomRef.current?.diagnostics() ?? null} />
+          </>
         ) : (
           <ul className="space-y-3">
             {guests.map(p => (

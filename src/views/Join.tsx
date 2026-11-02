@@ -1,3 +1,4 @@
+import { Diag } from '../components/Diag'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ProShareRoom, peerMutual, type ChatMsg, type IncomingFile, type PeerInfo } from '../lib/room'
 import { MAX_TEXT_CHARS, formatBytes, saveBlob } from '../lib/files'
@@ -112,6 +113,7 @@ export function Join({ roomCode }: { roomCode: string }) {
             ? 'No one is hosting this code right now. Check the code with the sender - if they open the room while you wait, you will connect automatically.'
             : 'Keep this tab open. If the sender doesn\'t see your request, double-check the code with them.'}
         </p>
+        <Diag get={() => roomRef.current?.diagnostics() ?? null} />
       </div>
     )
   }
