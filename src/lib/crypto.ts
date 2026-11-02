@@ -39,7 +39,9 @@ export function b64ToBytes(s: string): Uint8Array {
 // man-in-the-middle produces different verification codes on each side.
 
 export interface SessionKeys {
-  encKey: CryptoKey // AES-GCM for handshake payloads
+  hsKey: CryptoKey // AES-GCM for handshake payloads (both directions, random IVs)
+  sendKey: CryptoKey // AES-GCM for content this side sends (direction-separated)
+  recvKey: CryptoKey // AES-GCM for content this side receives
   verifyCode: string // 6 digits, grouped 3-3
 }
 
@@ -51,32 +53,61 @@ export async function exportPub(pair: CryptoKeyPair): Promise<string> {
   return bytesToB64(await crypto.subtle.exportKey('raw', pair.publicKey))
 }
 
-export async function deriveSessionKeys(priv: CryptoKey, remotePubB64: string, selfId: string, peerId: string): Promise<SessionKeys> {
+export async function deriveSessionKeys(priv: CryptoKey, remotePubB64: string, selfId: string, peerId: string, selfRole: 'host' | 'guest'): Promise<SessionKeys> {
   const remotePub = await crypto.subtle.importKey('raw', b64ToBytes(remotePubB64) as BufferSource, { name: 'ECDH', namedCurve: 'P-256' }, false, [])
   const bits = await crypto.subtle.deriveBits({ name: 'ECDH', public: remotePub } as EcdhKeyDeriveParams, priv, 256)
   const hkdfIn = await crypto.subtle.importKey('raw', bits, 'HKDF', false, ['deriveBits'])
   // Bind the session to this exact pair of peer ids.
-  const salt = new TextEncoder().encode(['proshare-session-v1', ...[selfId, peerId].sort()].join(':'))
-  const material = new Uint8Array(await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: salt as BufferSource, info: new Uint8Array(0) } as HkdfParams, hkdfIn, 512))
-  const encKey = await crypto.subtle.importKey('raw', material.slice(0, 32) as BufferSource, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt'])
-  const v = material.slice(32, 40)
+  const salt = new TextEncoder().encode(['proshare-session-v2', ...[selfId, peerId].sort()].join(':'))
+  // 832 bits: handshake key | host->guest content key | guest->host content key | verify
+  const material = new Uint8Array(await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: salt as BufferSource, info: new Uint8Array(0) } as HkdfParams, hkdfIn, 832))
+  const aes = (b: Uint8Array) => crypto.subtle.importKey('raw', b as BufferSource, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt'])
+  const [hsKey, h2g, g2h] = await Promise.all([aes(material.slice(0, 32)), aes(material.slice(32, 64)), aes(material.slice(64, 96))])
+  const v = material.slice(96, 104)
   const n = (((v[0] << 24) | (v[1] << 16) | (v[2] << 8) | v[3]) >>> 0) % 1_000_000
-  return { encKey, verifyCode: n.toString().padStart(6, '0').replace(/(\d{3})(\d{3})/, '$1 $2') }
+  return {
+    hsKey,
+    sendKey: selfRole === 'host' ? h2g : g2h,
+    recvKey: selfRole === 'host' ? g2h : h2g,
+    verifyCode: n.toString().padStart(6, '0').replace(/(\d{3})(\d{3})/, '$1 $2'),
+  }
 }
 
-export async function seal(encKey: CryptoKey, obj: unknown): Promise<string> {
-  const iv = crypto.getRandomValues(new Uint8Array(12))
-  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv as BufferSource }, encKey, new TextEncoder().encode(JSON.stringify(obj)))
+function pack(iv: Uint8Array, ct: ArrayBuffer): string {
   const out = new Uint8Array(12 + ct.byteLength)
   out.set(iv, 0)
   out.set(new Uint8Array(ct), 12)
   return bytesToB64(out)
 }
 
-export async function open(encKey: CryptoKey, b64: unknown): Promise<unknown> {
-  if (typeof b64 !== 'string') throw new Error('bad handshake payload')
+function unpack(b64: string): { iv: Uint8Array; ct: Uint8Array } {
   const raw = b64ToBytes(b64)
-  if (raw.length < 13) throw new Error('bad handshake payload')
-  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: raw.slice(0, 12) as BufferSource }, encKey, raw.slice(12) as BufferSource)
+  if (raw.length < 13) throw new Error('bad payload')
+  return { iv: raw.slice(0, 12), ct: raw.slice(12) }
+}
+
+export async function seal(encKey: CryptoKey, obj: unknown, ad?: Uint8Array): Promise<string> {
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv as BufferSource, ...(ad ? { additionalData: ad as BufferSource } : {}) }, encKey, new TextEncoder().encode(JSON.stringify(obj)))
+  return pack(iv, ct)
+}
+
+export async function open(encKey: CryptoKey, b64: unknown, ad?: Uint8Array): Promise<unknown> {
+  if (typeof b64 !== 'string') throw new Error('bad payload')
+  const { iv, ct } = unpack(b64)
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv as BufferSource, ...(ad ? { additionalData: ad as BufferSource } : {}) }, encKey, ct as BufferSource)
   return JSON.parse(new TextDecoder().decode(pt))
+}
+
+export async function sealRaw(encKey: CryptoKey, data: Uint8Array, ad: Uint8Array): Promise<string> {
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv as BufferSource, additionalData: ad as BufferSource }, encKey, data as BufferSource)
+  return pack(iv, ct)
+}
+
+export async function openRaw(encKey: CryptoKey, b64: unknown, ad: Uint8Array): Promise<Uint8Array> {
+  if (typeof b64 !== 'string') throw new Error('bad payload')
+  const { iv, ct } = unpack(b64)
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv as BufferSource, additionalData: ad as BufferSource }, encKey, ct as BufferSource)
+  return new Uint8Array(pt)
 }

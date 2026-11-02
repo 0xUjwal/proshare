@@ -23,10 +23,20 @@ never uploaded to, or stored on, any server.
   two sides holds different ECDH secrets with each, producing different codes.
   WebRTC's own DTLS fingerprints are not exposed by the rendezvous library, so the
   SAS comparison is the binding check - not the DTLS layer.
-- **WebRTC for data.** Files and text move over WebRTC DataChannels (DTLS, end-to-end
-  encrypted). No TURN relay is used, so file bytes never pass through a third party.
-  The tradeoff: some restrictive or symmetric-NAT networks cannot establish a direct
-  connection.
+- **Application-layer encryption on top of WebRTC.** Files and text move over WebRTC
+  DataChannels (DTLS). Because the rendezvous library does not expose the DTLS
+  fingerprints, DTLS alone cannot be checked against an active attacker who forwards
+  the key exchange honestly but terminates two WebRTC legs. So every content payload -
+  file metadata, every 256 KiB file chunk, every text message - is additionally
+  AES-GCM sealed under the pair's ECDH session key with direction-separated keys
+  (host-to-guest and guest-to-host), strictly increasing per-direction sequence
+  numbers for replay/order binding, and all metadata inside the envelope. A relay or
+  middlebox without the session key can only drop messages, which breaks the sequence
+  and fails the transfer loudly. Standard WebCrypto primitives (ECDH P-256, HKDF-SHA256,
+  AES-GCM); the composition is simple but not externally reviewed - treat it as
+  unreviewed cryptography. SHA-256 per file remains as the end-to-end integrity check.
+  No TURN relay is used, so file bytes never pass through a third party; the tradeoff
+  is that some restrictive or symmetric-NAT networks cannot connect.
 - **Nostr relays for discovery only.** Peers find each other through public
   [Nostr](https://nostr.com) relays using [Trystero](https://github.com/dmotz/trystero)
   (MIT). Connection setup passes these relays in readable form: relays - and anyone
