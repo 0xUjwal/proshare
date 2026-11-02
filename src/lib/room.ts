@@ -17,13 +17,13 @@
 //    readable form: relays and anyone who guesses a live code can see
 //    connection metadata (IPs, timing). Never file contents.
 import { joinRoom, selfId, type MessageAction, type Room } from 'trystero'
-import { deriveSessionKeys, exportPub, generateKxPair, open, openRaw, seal, sealRaw, sha256Hex, type SessionKeys } from './crypto'
-import { MAX_FILE_BYTES, MAX_TEXT_CHARS, sanitizeFilename } from './files'
+import { deriveSessionKeys, exportPub, generateKxPair, open, seal, sha256Hex, type SessionKeys } from './crypto'
+import { ContentReceiver, ContentSender, CHUNK_BYTES, chunkCount, MAX_WIRE_BYTES, type FileMeta } from './transfer'
+import { MAX_TEXT_CHARS } from './files'
+
+export type { FileMeta } from './transfer'
 
 export const APP_ID = 'proshare-p2p-v1'
-const CHUNK_BYTES = 256 * 1024
-// Chunks travel as base64(iv || AES-GCM ciphertext): 4/3 the raw size plus tag.
-export const MAX_WIRE_BYTES = Math.ceil((CHUNK_BYTES + 28) / 3) * 4 + 64
 export type Role = 'host' | 'guest'
 
 export interface PeerInfo {
@@ -38,15 +38,6 @@ export interface PendingRequest {
   peerId: string
   name: string
   resolve: (approved: boolean) => void
-}
-
-export interface FileMeta {
-  [key: string]: string | number
-  id: string
-  name: string
-  size: number
-  type: string
-  sha256: string
 }
 
 export interface IncomingFile {
@@ -71,14 +62,6 @@ export interface RoomEvents {
   onLeft: (peerId: string, role: Role | null) => void
 }
 
-function concatChunks(chunks: Uint8Array[]): ArrayBuffer {
-  const total = chunks.reduce((a, c) => a + c.length, 0)
-  const out = new Uint8Array(total)
-  let off = 0
-  for (const c of chunks) { out.set(c, off); off += c.length }
-  return out.buffer
-}
-
 export class ProShareRoom {
   readonly role: Role
   readonly roomCode: string
@@ -88,7 +71,7 @@ export class ProShareRoom {
   private rejected = new Set<string>()
   private pendingQueue: PendingRequest[] = []
   private pendingActive: PendingRequest | null = null
-  private sessions = new Map<string, { keys: SessionKeys; sendSeq: number; recvSeq: number }>()
+  private sessions = new Map<string, { sender: ContentSender; receiver: ContentReceiver }>()
   private ev: RoomEvents
   private closed = false
 
@@ -103,7 +86,7 @@ export class ProShareRoom {
     this.ev = ev
 
     this.room = joinRoom(
-      { appId: APP_ID, maxReceiveBytes: MAX_FILE_BYTES + 64 * 1024 * 1024 },
+      { appId: APP_ID, maxReceiveBytes: 1024 * 1024 * 1024 + 64 * 1024 * 1024 },
       roomCode,
       {
         handshakeTimeoutMs: 120_000, // a human needs time to approve
@@ -160,65 +143,35 @@ export class ProShareRoom {
     this.sendFileAction = this.room.makeAction('file')
     this.textAction = this.room.makeAction('text')
 
-    // Every content payload is AEAD-sealed under the pair's ECDH session key:
-    // direction-separated keys, strictly increasing sequence numbers (order and
-    // replay binding), and all transfer metadata inside the envelope. A relay or
-    // active MITM without the session key can drop messages but cannot read,
-    // alter, or forge them - and dropping breaks the sequence, failing the transfer.
+    // Every content payload is AEAD-sealed under the pair's ECDH session key
+    // (see transfer.ts): direction-separated keys, strict sequencing, all
+    // metadata inside the envelope. A relay or active MITM without the session
+    // key can drop messages but cannot read, alter, or forge them - and
+    // dropping breaks the sequence, failing the transfer loudly.
     this.sendFileAction.onReceive = ({ byteLength, peerId }) => {
-      const sess = this.sessions.get(peerId)
-      if (!sess) return false
-      if (typeof byteLength !== 'number' || byteLength <= 0 || byteLength > MAX_WIRE_BYTES) return false
-      return true
+      if (!this.sessions.has(peerId)) return false
+      return typeof byteLength === 'number' && byteLength > 0 && byteLength <= MAX_WIRE_BYTES
     }
     this.sendFileAction.onMessage = async (data, { peerId, metadata }) => {
       const sess = this.sessions.get(peerId)
-      if (!sess || typeof data !== 'string') return
-      const wm = metadata as { id?: string; k?: string; i?: number } | undefined
-      if (!wm || typeof wm.id !== 'string' || (wm.k !== 'm' && wm.k !== 'c')) return
-      try {
-        if (wm.k === 'm') {
-          const env = (await open(sess.keys.recvKey, data)) as { s?: number; t?: string; id?: string; name?: unknown; size?: number; type?: unknown; sha256?: string; n?: number }
-          if (env.s !== sess.recvSeq + 1 || env.t !== 'meta' || env.id !== wm.id) return
-          sess.recvSeq = env.s
-          if (typeof env.size !== 'number' || env.size < 0 || env.size > MAX_FILE_BYTES) return
-          if (typeof env.sha256 !== 'string' || typeof env.n !== 'number' || env.n < 1 || env.n > Math.ceil(MAX_FILE_BYTES / CHUNK_BYTES)) return
-          const meta: FileMeta = {
-            id: env.id.slice(0, 40),
-            name: sanitizeFilename(env.name),
-            size: env.size,
-            type: typeof env.type === 'string' ? env.type.slice(0, 120) : 'application/octet-stream',
-            sha256: env.sha256,
-          }
-          this.incoming.set(meta.id, { meta, chunks: new Array(env.n), got: 0, total: env.n })
-          this.ev.onFileStart({ meta, progress: 0, status: 'receiving' })
-        } else {
-          if (typeof wm.i !== 'number' || wm.i < 0) return
-          const rec = this.incoming.get(wm.id)
-          if (!rec || wm.i >= rec.total) return
-          const ad = new TextEncoder().encode(JSON.stringify({ s: sess.recvSeq + 1, id: wm.id, i: wm.i }))
-          const chunk = await openRaw(sess.keys.recvKey, data, ad)
-          sess.recvSeq++
-          rec.chunks[wm.i] = chunk
-          rec.got++
-          this.ev.onFileProgress(rec.meta.id, rec.got / rec.total)
-          if (rec.got === rec.total) {
-            this.incoming.delete(rec.meta.id)
-            const buf = concatChunks(rec.chunks as Uint8Array[])
-            this.ev.onFileDone({ meta: rec.meta, progress: 1, status: 'verifying', data: buf })
-            try {
-              const hash = await sha256Hex(buf)
-              if (hash !== rec.meta.sha256) {
-                this.ev.onFileDone({ meta: rec.meta, progress: 1, status: 'failed', error: 'integrity check failed - file corrupted in transit' })
-                return
-              }
-              this.ev.onFileDone({ meta: rec.meta, progress: 1, status: 'done', data: buf })
-            } catch {
-              this.ev.onFileDone({ meta: rec.meta, progress: 1, status: 'failed', error: 'could not verify integrity' })
+      if (!sess) return
+      for (const ev of await sess.receiver.acceptFileMessage(data, metadata as Record<string, unknown>)) {
+        if (ev.type === 'start') this.ev.onFileStart({ meta: ev.meta, progress: 0, status: 'receiving' })
+        else if (ev.type === 'progress') this.ev.onFileProgress(ev.id, ev.progress)
+        else if (ev.type === 'file') {
+          this.ev.onFileDone({ meta: ev.meta, progress: 1, status: 'verifying', data: ev.data })
+          try {
+            const hash = await sha256Hex(ev.data)
+            if (hash !== ev.meta.sha256) {
+              this.ev.onFileDone({ meta: ev.meta, progress: 1, status: 'failed', error: 'integrity check failed - file corrupted in transit' })
+              continue
             }
+            this.ev.onFileDone({ meta: ev.meta, progress: 1, status: 'done', data: ev.data })
+          } catch {
+            this.ev.onFileDone({ meta: ev.meta, progress: 1, status: 'failed', error: 'could not verify integrity' })
           }
         }
-      } catch { /* undecryptable or out-of-sequence payload: drop */ }
+      }
     }
 
     this.textAction.onReceive = ({ byteLength, peerId }) => {
@@ -227,20 +180,10 @@ export class ProShareRoom {
     this.textAction.onMessage = async (data, { peerId }) => {
       const sess = this.sessions.get(peerId)
       const peer = this.peers.get(peerId)
-      if (!sess || !peer || typeof data !== 'string') return
-      try {
-        const m = (await open(sess.keys.recvKey, data)) as { s?: number; t?: string; id?: string; text?: unknown; ts?: number }
-        if (m.s !== sess.recvSeq + 1 || m.t !== 'text') return
-        sess.recvSeq = m.s
-        if (typeof m.text !== 'string' || !m.text || m.text.length > MAX_TEXT_CHARS) return
-        this.ev.onText({
-          id: String(m.id ?? Math.random()),
-          from: peerId,
-          name: peer.name,
-          text: m.text,
-          ts: typeof m.ts === 'number' ? m.ts : Date.now(),
-        })
-      } catch { /* drop */ }
+      if (!sess || !peer) return
+      for (const ev of await sess.receiver.acceptText(data)) {
+        if (ev.type === 'text') this.ev.onText({ id: ev.id || String(Math.random()), from: peerId, name: peer.name, text: ev.text, ts: ev.ts })
+      }
     }
 
     this.room.onPeerLeave = (peerId: string) => {
@@ -257,8 +200,6 @@ export class ProShareRoom {
       this.emitPeers()
     }
   }
-
-  private incoming = new Map<string, { meta: FileMeta; chunks: (Uint8Array | undefined)[]; got: number; total: number }>()
 
   static host(roomCode: string, ev: RoomEvents, name: string) {
     return new ProShareRoom('host', roomCode, ev, name)
@@ -295,7 +236,7 @@ export class ProShareRoom {
 
   private async addPeer(id: string, name: string, role: Role, session: SessionKeys) {
     this.peers.set(id, { id, name, role, code: session.verifyCode, connectedAt: Date.now() })
-    this.sessions.set(id, { keys: session, sendSeq: 0, recvSeq: 0 })
+    this.sessions.set(id, { sender: new ContentSender(session), receiver: new ContentReceiver(session) })
     this.emitPeers()
   }
 
@@ -311,15 +252,12 @@ export class ProShareRoom {
     const sess = this.sessions.get(peerId)
     if (!sess) throw new Error('peer is not approved')
     const buf = new Uint8Array(await file.arrayBuffer())
-    const n = Math.max(1, Math.ceil(buf.length / CHUNK_BYTES))
-    const sealedMeta = await seal(sess.keys.sendKey, { s: ++sess.sendSeq, t: 'meta', id: meta.id, name: meta.name, size: meta.size, type: meta.type, sha256: meta.sha256, n })
-    await this.sendFileAction.send(sealedMeta, { target: peerId, metadata: { id: meta.id, k: 'm' } })
+    const n = chunkCount(buf.length)
+    const m = await sess.sender.sealFileMeta(meta, n)
+    await this.sendFileAction.send(m.data, { target: peerId, metadata: m.wire })
     for (let i = 0; i < n; i++) {
-      const seq = sess.sendSeq + 1
-      const ad = new TextEncoder().encode(JSON.stringify({ s: seq, id: meta.id, i }))
-      const sealed = await sealRaw(sess.keys.sendKey, buf.slice(i * CHUNK_BYTES, (i + 1) * CHUNK_BYTES), ad)
-      sess.sendSeq = seq
-      await this.sendFileAction.send(sealed, { target: peerId, metadata: { id: meta.id, k: 'c', i } })
+      const c = await sess.sender.sealChunk(meta.id, i, buf.slice(i * CHUNK_BYTES, (i + 1) * CHUNK_BYTES))
+      await this.sendFileAction.send(c.data, { target: peerId, metadata: c.wire })
       onProgress((i + 1) / n)
     }
   }
@@ -330,8 +268,7 @@ export class ProShareRoom {
     for (const t of ids) {
       const sess = this.sessions.get(t)
       if (!sess) continue
-      const msg = { s: ++sess.sendSeq, t: 'text', id: crypto.randomUUID(), text, ts: Date.now() }
-      await this.textAction.send(await seal(sess.keys.sendKey, msg), { target: t })
+      await this.textAction.send(await sess.sender.sealText(crypto.randomUUID(), text, Date.now()), { target: t })
     }
   }
 

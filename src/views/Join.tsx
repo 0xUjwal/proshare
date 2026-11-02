@@ -16,6 +16,8 @@ export function Join({ roomCode }: { roomCode: string }) {
   const [notice, setNotice] = useState<string | null>(null)
   const [noHostHint, setNoHostHint] = useState(false)
   const [confirmed, setConfirmed] = useState(false)
+  const confirmedRef = useRef(false)
+  const heldSaves = useRef<IncomingFile[]>([])
   const roomRef = useRef<ProShareRoom | null>(null)
 
   const connect = useCallback(() => {
@@ -28,7 +30,12 @@ export function Join({ roomCode }: { roomCode: string }) {
       onFileProgress: (id, progress) => setFiles(fs => fs.map(x => x.meta.id === id ? { ...x, progress } : x)),
       onFileDone: f => {
         setFiles(fs => fs.map(x => x.meta.id === f.meta.id ? f : x))
-        if (f.status === 'done' && f.data) saveBlob(f.data, f.meta.name, f.meta.type)
+        // Files are not saved until the receiver confirms the verification
+        // code - the confirmation is what authenticates the connection.
+        if (f.status === 'done' && f.data) {
+          if (confirmedRef.current) saveBlob(f.data, f.meta.name, f.meta.type)
+          else heldSaves.current.push(f)
+        }
       },
       onText: m => setChat(c => [...c.slice(-99), m]),
       onError: setNotice,
@@ -79,7 +86,7 @@ export function Join({ roomCode }: { roomCode: string }) {
             onChange={e => setName(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') connect() }} />
           <button className="btn btn-primary w-full" onClick={connect}>Request to join</button>
-          <p className="text-xs text-[--color-mut]">This opens a direct encrypted connection - no account, nothing uploaded. Peer discovery passes public relays (they can see timing and IPs, never contents).</p>
+          <p className="text-xs text-[--color-mut]">This opens a direct encrypted connection - no account, nothing uploaded. Peer discovery passes public relays (they can see timing and IPs). Contents are protected once you confirm the verification code.</p>
         </Card>
       </div>
     )
@@ -127,7 +134,11 @@ export function Join({ roomCode }: { roomCode: string }) {
           <div className="font-semibold text-lg mb-1">Before anything is shared</div>
           <p className="text-sm text-[--color-mut] mb-2">Compare this code with the sender's screen over a call or another chat. It is fresh for this connection - if anyone is in the middle, the codes will not match.</p>
           <div className="mono text-3xl font-bold tracking-[0.2em] text-[--color-brand2] mb-3">{host.code}</div>
-          <button className="btn btn-ok w-full" onClick={() => setConfirmed(true)}>The codes match</button>
+          <button className="btn btn-ok w-full" onClick={() => {
+            confirmedRef.current = true
+            setConfirmed(true)
+            for (const f of heldSaves.current.splice(0)) { if (f.data) saveBlob(f.data, f.meta.name, f.meta.type) }
+          }}>The codes match</button>
         </Card>
       )}
       </div>
@@ -149,7 +160,8 @@ export function Join({ roomCode }: { roomCode: string }) {
               <div key={f.meta.id} className="text-sm space-y-1">
                 <div className="flex justify-between gap-3">
                   <span className="truncate">{f.meta.name}</span>
-                  {f.status === 'done' ? <span className="pill pill-ok shrink-0">received &middot; verified</span>
+                  {f.status === 'done' && !confirmed ? <span className="pill pill-warn shrink-0">received &middot; verified &middot; confirm code to save</span>
+                    : f.status === 'done' ? <span className="pill pill-ok shrink-0">received &middot; verified</span>
                     : f.status === 'failed' ? <span className="pill pill-bad shrink-0">failed</span>
                     : f.status === 'verifying' ? <span className="pill pill-warn shrink-0">verifying</span>
                     : <span className="text-[--color-mut] shrink-0">{Math.round(f.progress * 100)}%</span>}

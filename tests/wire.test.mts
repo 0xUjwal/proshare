@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { MAX_WIRE_BYTES } from '../src/lib/room.ts'
+import { MAX_WIRE_BYTES } from '../src/lib/transfer.ts'
 
 test('wire cap admits a full base64-sealed chunk', () => {
   const CHUNK = 256 * 1024
