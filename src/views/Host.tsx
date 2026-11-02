@@ -1,3 +1,4 @@
+import { CopyButton } from '../components/CopyButton'
 import { Diag } from '../components/Diag'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ProShareRoom, peerMutual, type ChatMsg, type FileMeta, type PeerInfo, type PendingRequest } from '../lib/room'
@@ -242,7 +243,10 @@ export function Host({ roomCode }: { roomCode: string }) {
           {chat.length === 0 && <p className="text-sm text-[--color-mut]">Text you send appears as plain text only - no links auto-open, no formatting, no scripts.</p>}
           {chat.map(m => (
             <div key={m.id} className={`text-sm rounded-xl px-3 py-2 max-w-[85%] whitespace-pre-wrap break-words ${m.name === 'You' ? 'bg-[rgba(109,92,255,.16)] ml-auto' : 'bg-[--color-panel2]'}`}>
-              <div className="text-xs text-[--color-mut] mb-0.5">{m.name}</div>
+              <div className="flex items-center justify-between gap-2 mb-0.5">
+                <span className="text-xs text-[--color-mut]">{m.name}</span>
+                {m.name !== 'You' && <CopyButton text={m.text} />}
+              </div>
               {m.text}
             </div>
           ))}

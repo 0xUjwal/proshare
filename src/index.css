@@ -72,3 +72,6 @@ body {
 
 .progress-track { background: var(--color-panel2); border-radius: 999px; overflow: hidden; height: .55rem; }
 .progress-fill { background: linear-gradient(90deg, var(--color-brand), var(--color-brand2)); height: 100%; transition: width .2s ease; }
+
+.icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 8px; color: var(--color-mut); background: transparent; border: 1px solid transparent; cursor: pointer; flex-shrink: 0; }
+.icon-btn:hover { color: #fff; background: rgba(255,255,255,.08); border-color: var(--color-line); }

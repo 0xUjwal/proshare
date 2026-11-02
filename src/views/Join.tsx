@@ -1,3 +1,4 @@
+import { CopyButton } from '../components/CopyButton'
 import { Diag } from '../components/Diag'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ProShareRoom, peerMutual, type ChatMsg, type IncomingFile, type PeerInfo } from '../lib/room'
@@ -28,10 +29,9 @@ export function Join({ roomCode }: { roomCode: string }) {
       onFileProgress: (id, progress) => setFiles(fs => fs.map(x => x.meta.id === id ? { ...x, progress } : x)),
       onFileDone: f => {
         setFiles(fs => fs.map(x => x.meta.id === f.meta.id ? f : x))
-        // The protocol layer drops all content until both sides confirmed
-        // the verification code, so a completed file here is authenticated
-        // and can be saved straight away.
-        if (f.status === 'done' && f.data) saveBlob(f.data, f.meta.name, f.meta.type)
+        // The protocol layer drops all content until both sides confirmed the
+        // verification code. Nothing is saved automatically: the file stays in
+        // memory until the user presses its download icon.
       },
       onText: m => setChat(c => [...c.slice(-99), m]),
       onError: setNotice,
@@ -151,14 +151,14 @@ export function Join({ roomCode }: { roomCode: string }) {
       <Card>
         <div className="text-xs font-semibold text-[--color-mut] uppercase tracking-wider mb-3">Incoming files</div>
         {files.length === 0 ? (
-          <p className="text-sm text-[--color-mut]">Files the host sends appear here. Each one is integrity-checked (SHA-256) and then saved by your browser as a download.</p>
+          <p className="text-sm text-[--color-mut]">Files the host sends appear here. Each one is integrity-checked (SHA-256). Nothing downloads until you press the download icon.</p>
         ) : (
           <div className="space-y-3">
             {files.map(f => (
               <div key={f.meta.id} className="text-sm space-y-1">
                 <div className="flex justify-between gap-3">
                   <span className="truncate">{f.meta.name}</span>
-                  {f.status === 'done' ? <span className="pill pill-ok shrink-0">received &middot; verified</span>
+                  {f.status === 'done' ? <span className="flex items-center gap-2 shrink-0"><span className="pill pill-ok">received &middot; verified</span>{f.data && <button type="button" className="icon-btn" aria-label={`Download ${f.meta.name}`} title="Download" onClick={() => saveBlob(f.data!, f.meta.name, f.meta.type)}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M5 21h14" /></svg></button>}</span>
                     : f.status === 'failed' ? <span className="pill pill-bad shrink-0">failed</span>
                     : f.status === 'verifying' ? <span className="pill pill-warn shrink-0">verifying</span>
                     : <span className="text-[--color-mut] shrink-0">{Math.round(f.progress * 100)}%</span>}
@@ -178,7 +178,10 @@ export function Join({ roomCode }: { roomCode: string }) {
           {chat.length === 0 && <p className="text-sm text-[--color-mut]">Messages appear as plain text only - nothing clickable or executable.</p>}
           {chat.map(m => (
             <div key={m.id} className={`text-sm rounded-xl px-3 py-2 max-w-[85%] whitespace-pre-wrap break-words ${m.name === 'You' ? 'bg-[rgba(109,92,255,.16)] ml-auto' : 'bg-[--color-panel2]'}`}>
-              <div className="text-xs text-[--color-mut] mb-0.5">{m.name}</div>
+              <div className="flex items-center justify-between gap-2 mb-0.5">
+                <span className="text-xs text-[--color-mut]">{m.name}</span>
+                {m.name !== 'You' && <CopyButton text={m.text} />}
+              </div>
               {m.text}
             </div>
           ))}
