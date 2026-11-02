@@ -75,7 +75,7 @@ export function Join({ roomId, password }: { roomId: string; password: string })
             onChange={e => setName(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') connect() }} />
           <button className="btn btn-primary w-full" onClick={connect}>Request to join</button>
-          <p className="text-xs text-[--color-mut]">This opens a direct encrypted connection. No account, nothing uploaded.</p>
+          <p className="text-xs text-[--color-mut]">This opens a direct encrypted connection - no account, nothing uploaded. Peer discovery passes public relays (they can see timing and IPs, never contents).</p>
         </Card>
       </div>
     )
@@ -127,14 +127,14 @@ export function Join({ roomId, password }: { roomId: string; password: string })
       <Card>
         <div className="text-xs font-semibold text-[--color-mut] uppercase tracking-wider mb-3">Incoming files</div>
         {files.length === 0 ? (
-          <p className="text-sm text-[--color-mut]">Files the host sends will appear here and download automatically after an integrity check.</p>
+          <p className="text-sm text-[--color-mut]">Files the host sends appear here. Each one is integrity-checked (SHA-256) and then saved by your browser as a download.</p>
         ) : (
           <div className="space-y-3">
             {files.map(f => (
               <div key={f.meta.id} className="text-sm space-y-1">
                 <div className="flex justify-between gap-3">
                   <span className="truncate">{f.meta.name}</span>
-                  {f.status === 'done' ? <span className="pill pill-ok shrink-0">saved &middot; verified</span>
+                  {f.status === 'done' ? <span className="pill pill-ok shrink-0">received &middot; verified</span>
                     : f.status === 'failed' ? <span className="pill pill-bad shrink-0">failed</span>
                     : f.status === 'verifying' ? <span className="pill pill-warn shrink-0">verifying</span>
                     : <span className="text-[--color-mut] shrink-0">{Math.round(f.progress * 100)}%</span>}

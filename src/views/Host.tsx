@@ -202,7 +202,7 @@ export function Host({ roomId, password }: { roomId: string; password: string })
               <div key={i} className="text-sm space-y-1">
                 <div className="flex justify-between gap-3">
                   <span className="truncate">{o.meta.name} <span className="text-[--color-mut]">&rarr; {o.targetName}</span></span>
-                  {o.status === 'done' ? <span className="pill pill-ok shrink-0">sent &middot; verified</span>
+                  {o.status === 'done' ? <span className="pill pill-ok shrink-0">sent</span>
                     : o.status === 'failed' ? <span className="pill pill-bad shrink-0">failed</span>
                     : <span className="text-[--color-mut] shrink-0">{Math.round(o.progress * 100)}%</span>}
                 </div>

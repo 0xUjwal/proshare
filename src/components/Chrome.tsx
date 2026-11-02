@@ -17,11 +17,11 @@ export function Shell({ children }: { children: ReactNode }) {
     <div className="bg-mesh min-h-full flex flex-col">
       <header className="w-full max-w-4xl mx-auto px-5 pt-6 flex items-center justify-between">
         <a href="#/"><Logo /></a>
-        <span className="pill pill-ok hidden sm:inline-block">no servers &middot; no accounts &middot; no tracking</span>
+        <span className="pill pill-ok">no uploads &middot; no accounts &middot; no tracking</span>
       </header>
       <main className="flex-1 w-full max-w-4xl mx-auto px-5 py-8 flex flex-col">{children}</main>
       <footer className="w-full max-w-4xl mx-auto px-5 pb-6 text-xs text-[--color-mut] leading-relaxed">
-        Files move directly between browsers, end-to-end encrypted. Nothing is uploaded or stored anywhere.
+        Files and text move directly between the two browsers, end-to-end encrypted. Nothing you send is uploaded to a server.
       </footer>
     </div>
   )

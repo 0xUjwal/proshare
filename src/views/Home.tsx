@@ -19,11 +19,11 @@ export function Home() {
           Send files to someone.<br /><span className="text-[--color-brand2]">Not to a server.</span>
         </h1>
         <p className="text-[--color-mut] max-w-xl leading-relaxed">
-          ProShare connects two browsers directly. Files and text go straight from your device to theirs,
-          encrypted - never uploaded, never stored, never scanned. You approve exactly who gets in.
+          ProShare connects two browsers directly. Files and text travel straight from your device to theirs
+          over an encrypted channel - your files are never uploaded to a server. You approve exactly who gets in.
         </p>
         <button className="btn btn-primary text-lg mt-2 px-8 py-4" onClick={start}>Start a private room</button>
-        <p className="text-xs text-[--color-mut]">Free &middot; no account &middot; works on modern phones and computers</p>
+        <p className="text-xs text-[--color-mut]">Free &middot; no account &middot; nothing to install</p>
       </section>
 
       <section className="grid sm:grid-cols-3 gap-3 mt-2">
