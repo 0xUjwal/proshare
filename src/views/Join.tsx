@@ -18,6 +18,7 @@ export function Join({ roomCode }: { roomCode: string }) {
   const [notice, setNotice] = useState<string | null>(null)
   const [noHostHint, setNoHostHint] = useState(false)
   const [delivered, setDelivered] = useState(false)
+  const [joinErr, setJoinErr] = useState<string | null>(null)
   useEffect(() => {
     const t = setInterval(() => setDelivered(/delivered/.test(roomRef.current?.diagnostics().stage ?? '')), 1000)
     return () => clearInterval(t)
@@ -45,6 +46,7 @@ export function Join({ roomCode }: { roomCode: string }) {
         // problem. While connected, relay-level join errors are noise - the
         // host leaving is reported via onLeft instead.
         if (/same-role/i.test(msg)) return
+        setJoinErr(String(msg).slice(0, 200))
         setPhase(prev => {
           if (prev === 'connected') return prev
           return /declined|deny|denied|reject/i.test(msg) ? 'declined' : 'failed'
@@ -101,9 +103,10 @@ export function Join({ roomCode }: { roomCode: string }) {
         <p className="text-[--color-mut] max-w-sm">
           {phase === 'declined'
             ? 'The host did not approve this request. Check you used the exact link they sent, and ask them to approve you.'
-            : 'The direct connection could not be established. Some restrictive networks block peer-to-peer connections. Try another network, or ask the host to start a new session.'}
+            : 'The connection could not be established. The cause is not known from this screen; the technical message below is what the browser library reported. You can try again, try a different network, or ask the sender to start a new room.'}
         </p>
-        {phase === 'declined' && <button className="btn btn-ghost" onClick={() => setPhase('name')}>Try again</button>}
+        {phase === 'failed' && joinErr && <p className="text-xs text-[--color-mut] mono max-w-sm break-words">Reported: {joinErr}</p>}
+        {(phase === 'declined' || phase === 'failed') && <button className="btn btn-ghost" onClick={() => setPhase('name')}>Try again</button>}
       </div>
     )
   }
