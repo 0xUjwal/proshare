@@ -22,7 +22,7 @@ export function Shell({ children }: { children: ReactNode }) {
       <main className="flex-1 w-full max-w-4xl mx-auto px-5 py-8 flex flex-col">{children}</main>
       <footer className="w-full max-w-4xl mx-auto px-5 pb-6 text-xs text-[--color-mut] leading-relaxed">
         <p>Files and text move directly between the two browsers, end-to-end encrypted. Nothing you send is uploaded to a server.</p>
-        <p className="mt-1">Finding each other uses public relays, which can see connection metadata (IP addresses, timing) - never file contents. Their log retention is outside our control.</p>
+        <p className="mt-1">Finding each other uses public relays, which can see connection metadata (IP addresses, timing). File contents stay end-to-end encrypted; the mandatory code check catches tampering in the middle. Relay log retention is outside our control.</p>
       </footer>
     </div>
   )

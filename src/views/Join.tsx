@@ -15,6 +15,7 @@ export function Join({ roomCode }: { roomCode: string }) {
   const [text, setText] = useState('')
   const [notice, setNotice] = useState<string | null>(null)
   const [noHostHint, setNoHostHint] = useState(false)
+  const [confirmed, setConfirmed] = useState(false)
   const roomRef = useRef<ProShareRoom | null>(null)
 
   const connect = useCallback(() => {
@@ -117,11 +118,18 @@ export function Join({ roomCode }: { roomCode: string }) {
     <div className="fade-up flex flex-col gap-5">
       <div className="flex flex-col gap-1">
         <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Connected to {host ? host.name : 'host'}</h1>
-        {host && (
-          <p className="text-sm text-[--color-mut]">
-            Verification code <span className="mono text-[--color-brand2] text-base">{host.code}</span> - compare it with the code on the host's screen (over a call or chat) to be sure it's really them.
-          </p>
-        )}
+        {host && confirmed && (
+        <p className="text-sm text-[--color-mut]">Verification code <span className="mono text-[--color-brand2]">{host.code}</span> confirmed. You can receive files and reply below.</p>
+      )}
+
+      {host && !confirmed && (
+        <Card className="pulse-ring border-[--color-brand]">
+          <div className="font-semibold text-lg mb-1">Before anything is shared</div>
+          <p className="text-sm text-[--color-mut] mb-2">Compare this code with the sender's screen over a call or another chat. It is fresh for this connection - if anyone is in the middle, the codes will not match.</p>
+          <div className="mono text-3xl font-bold tracking-[0.2em] text-[--color-brand2] mb-3">{host.code}</div>
+          <button className="btn btn-ok w-full" onClick={() => setConfirmed(true)}>The codes match</button>
+        </Card>
+      )}
       </div>
 
       {notice && (
@@ -170,7 +178,7 @@ export function Join({ roomCode }: { roomCode: string }) {
           <input className="field" placeholder="Type a message&hellip;" value={text} maxLength={MAX_TEXT_CHARS}
             onChange={e => setText(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') sendText() }} />
-          <button className="btn btn-primary" onClick={sendText} disabled={!text.trim()}>Send</button>
+          <button className="btn btn-primary" onClick={sendText} disabled={!text.trim() || !confirmed}>Send</button>
         </div>
       </Card>
     </div>

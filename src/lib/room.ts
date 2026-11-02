@@ -280,9 +280,14 @@ export class ProShareRoom {
     })
   }
 
-  async sendText(text: string): Promise<void> {
+  async sendText(text: string, targets?: string[]): Promise<void> {
     if (text.length > MAX_TEXT_CHARS) throw new Error('message too long')
-    await this.textAction.send({ id: crypto.randomUUID(), text, ts: Date.now() })
+    const msg = { id: crypto.randomUUID(), text, ts: Date.now() }
+    if (targets && targets.length) {
+      for (const t of targets) await this.textAction.send(msg, { target: t })
+    } else {
+      await this.textAction.send(msg)
+    }
   }
 
   leave() {

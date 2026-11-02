@@ -14,7 +14,7 @@ export function Home() {
 
   const startCustom = useCallback(() => {
     const code = normalizeCode(sendCode)
-    if (!isValidCode(code)) { setErr('Use 4-32 characters: letters, numbers, spaces or dashes (or 6 digits).'); return }
+    if (!isValidCode(code)) { setErr('A room code is exactly 6 digits.'); return }
     location.hash = `#/host/${encodeURIComponent(code)}`
   }, [sendCode])
 
@@ -45,7 +45,7 @@ export function Home() {
           <p className="text-sm text-[--color-mut]">Open a room. You approve everyone who asks to join.</p>
           <button className="btn btn-primary w-full" onClick={startAuto}>Create a room</button>
           <div className="flex items-center gap-2 text-xs text-[--color-mut]"><span className="h-px flex-1 bg-[--color-line]" />or pick your own code<span className="h-px flex-1 bg-[--color-line]" /></div>
-          <input className="field" placeholder="e.g. family-photos-7" value={sendCode} maxLength={32}
+          <input className="field text-center text-lg tracking-widest" placeholder="Choose 6 digits" value={sendCode} maxLength={8} inputMode="numeric"
             onChange={e => { setSendCode(e.target.value); setErr(null) }}
             onKeyDown={e => { if (e.key === 'Enter') startCustom() }} />
           {customWarning && <p className="text-xs text-[--color-warn]">{customWarning}</p>}
@@ -54,8 +54,8 @@ export function Home() {
 
         <Card className="flex flex-col gap-3">
           <h2 className="text-lg font-bold">Receive</h2>
-          <p className="text-sm text-[--color-mut]">Enter the code the sender gave you (for example 482 916).</p>
-          <input className="field text-center text-lg tracking-widest" placeholder="Room code" value={joinCode} maxLength={32}
+          <p className="text-sm text-[--color-mut]">Enter the 6-digit code the sender gave you (for example 482 916).</p>
+          <input className="field text-center text-lg tracking-widest" placeholder="6-digit code" value={joinCode} maxLength={8} inputMode="numeric"
             onChange={e => { setJoinCode(e.target.value); setErr(null) }}
             onKeyDown={e => { if (e.key === 'Enter') join() }} />
           <button className="btn btn-primary w-full" onClick={join} disabled={!joinCode.trim()}>Connect</button>
