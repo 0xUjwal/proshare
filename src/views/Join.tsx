@@ -53,7 +53,7 @@ export function Join({ roomCode }: { roomCode: string }) {
     // Host approval can take a moment; show a friendly waiting state, and
     // if nobody is hosting the code at all, say so instead of hanging quietly.
     const t = setTimeout(() => setPhase(p => (p === 'connecting' ? 'waiting' : p)), 4000)
-    const t2 = setTimeout(() => setNoHostHint(true), 12000)
+    const t2 = setTimeout(() => { if (!/delivered/.test(room.diagnostics().stage)) setNoHostHint(true) }, 12000)
     return () => { clearTimeout(t); clearTimeout(t2) }
   }, [name, roomCode])
 
