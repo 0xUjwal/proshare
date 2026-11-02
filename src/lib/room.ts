@@ -70,6 +70,8 @@ export class ProShareRoom {
   private room: Room
   private peers = new Map<string, PeerInfo>()
   private rejected = new Set<string>()
+  private pendingQueue: PendingRequest[] = []
+  private pendingActive: PendingRequest | null = null
   private ev: RoomEvents
   private closed = false
 
@@ -106,11 +108,9 @@ export class ProShareRoom {
               await send({ t: 'reject' }).catch(() => {})
               throw new Error('previously declined')
             }
-            // Host decides. Ask the human.
-            const approved = await new Promise<boolean>(res => {
-              this.ev.onPending({ peerId, name, resolve: res })
-            })
-            this.ev.onPending(null)
+            // Host decides. Ask the human. Requests are queued so two
+            // simultaneous joiners never overwrite each other's prompt.
+            const approved = await this.enqueuePending(peerId, name)
             await send({ t: approved ? 'accept' : 'reject' })
             if (!approved) {
               this.rejected.add(peerId)
@@ -195,6 +195,12 @@ export class ProShareRoom {
     this.room.onPeerLeave = (peerId: string) => {
       const role = this.peers.get(peerId)?.role ?? null
       this.peers.delete(peerId)
+      if (this.pendingActive?.peerId === peerId) {
+        this.pendingActive = null
+        this.showNextPending()
+      } else if (this.pendingQueue.some(r => r.peerId === peerId)) {
+        this.pendingQueue = this.pendingQueue.filter(r => r.peerId !== peerId)
+      }
       this.ev.onLeft(peerId, role)
       this.emitPeers()
     }
@@ -207,6 +213,32 @@ export class ProShareRoom {
   }
   static guest(roomId: string, password: string, ev: RoomEvents, name: string) {
     return new ProShareRoom('guest', roomId, password, ev, name)
+  }
+
+  private enqueuePending(peerId: string, name: string): Promise<boolean> {
+    return new Promise<boolean>(resolve => {
+      const req: PendingRequest = {
+        peerId,
+        name,
+        resolve: (approved: boolean) => {
+          resolve(approved)
+          if (this.pendingActive === req) {
+            this.pendingActive = null
+            this.showNextPending()
+          } else {
+            this.pendingQueue = this.pendingQueue.filter(r => r !== req)
+          }
+        },
+      }
+      this.pendingQueue.push(req)
+      if (!this.pendingActive) this.showNextPending()
+    })
+  }
+
+  private showNextPending() {
+    if (this.pendingActive) return
+    this.pendingActive = this.pendingQueue.shift() ?? null
+    this.ev.onPending(this.pendingActive)
   }
 
   private async addPeer(id: string, name: string, role: Role) {

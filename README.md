@@ -31,9 +31,12 @@ devices over an encrypted WebRTC channel - they are never uploaded to, or stored
   client shares the same rendezvous secret and could bypass client-side role checks - that is
   inherent to shared-secret rendezvous without accounts. The 6-digit verification code shown
   to both sides is the out-of-band check that you are talking to the person you expect.
-- **End session is final.** Closing the host or pressing End session leaves the room; the old
-  link is dead and rejoining it fails with a connection error. Only a new session (new link)
-  works.
+- **End session ends your session - it does not revoke the link's secret.** Closing the host
+  or pressing End session removes the only approving party: the unmodified app can no longer
+  connect anyone over that link, and rejoining it fails with a connection error. The shared
+  secret itself cannot be revoked globally - link-holders running modified clients could still
+  rendezvous with each other in the same room, but never with your devices once your tabs are
+  closed. Only a new session (new link) gives you a fresh secret.
 
 - Received files are held in memory before saving; very large files can strain low-memory
   devices. Per-file limit is 1 GiB.
