@@ -31,12 +31,18 @@ export function Join({ roomId, password }: { roomId: string; password: string })
       onText: m => setChat(c => [...c.slice(-99), m]),
       onError: setNotice,
       onJoinError: msg => {
+        // Same-role rejections are other guests bumping into us, not a host
+        // problem. While connected, relay-level join errors are noise - the
+        // host leaving is reported via onLeft instead.
+        if (/same-role/i.test(msg)) return
         setPhase(prev => {
-          if (prev === 'connected') { setNotice('Connection to the host was lost.'); return prev }
+          if (prev === 'connected') return prev
           return /declined|deny|denied|reject/i.test(msg) ? 'declined' : 'failed'
         })
       },
-      onLeft: () => setNotice('The host left. The session is over - this link will not work anymore.'),
+      onLeft: (_id, role) => {
+        if (role === 'host') setNotice('The host left. The session is over - this link will not work anymore.')
+      },
     }, display)
     roomRef.current = room
     // Host approval can take a moment; show a friendly waiting state.

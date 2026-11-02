@@ -32,7 +32,7 @@ export function Host({ roomId, password }: { roomId: string; password: string })
       onText: m => setChat(c => [...c.slice(-99), m]),
       onError: setNotice,
       onJoinError: () => {},
-      onLeft: () => setNotice('A peer left the session.'),
+      onLeft: (_id, role) => { if (role === 'guest') setNotice('A peer left the session.') },
     }, 'Host')
     roomRef.current = room
     return () => { room.leave(); roomRef.current = null }

@@ -60,7 +60,7 @@ export interface RoomEvents {
   onText: (m: ChatMsg) => void
   onError: (msg: string) => void
   onJoinError: (msg: string) => void
-  onLeft: (peerId: string) => void
+  onLeft: (peerId: string, role: Role | null) => void
 }
 
 export class ProShareRoom {
@@ -69,6 +69,7 @@ export class ProShareRoom {
   readonly selfId = selfId
   private room: Room
   private peers = new Map<string, PeerInfo>()
+  private rejected = new Set<string>()
   private ev: RoomEvents
   private closed = false
 
@@ -99,13 +100,22 @@ export class ProShareRoom {
           const name = String(h.name).slice(0, 40) || 'Guest'
 
           if (role === 'host') {
+            // A peer the host rejected keeps retrying at the relay level;
+            // auto-reject repeats this session without re-prompting the human.
+            if (this.rejected.has(peerId)) {
+              await send({ t: 'reject' }).catch(() => {})
+              throw new Error('previously declined')
+            }
             // Host decides. Ask the human.
             const approved = await new Promise<boolean>(res => {
               this.ev.onPending({ peerId, name, resolve: res })
             })
             this.ev.onPending(null)
             await send({ t: approved ? 'accept' : 'reject' })
-            if (!approved) throw new Error('declined by host')
+            if (!approved) {
+              this.rejected.add(peerId)
+              throw new Error('declined by host')
+            }
             await this.addPeer(peerId, name, 'guest')
           } else {
             const { data: verdict } = await receive()
@@ -183,8 +193,9 @@ export class ProShareRoom {
     }
 
     this.room.onPeerLeave = (peerId: string) => {
+      const role = this.peers.get(peerId)?.role ?? null
       this.peers.delete(peerId)
-      this.ev.onLeft(peerId)
+      this.ev.onLeft(peerId, role)
       this.emitPeers()
     }
   }
