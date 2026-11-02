@@ -46,7 +46,12 @@ export function Host({ roomCode }: { roomCode: string }) {
       },
     }, 'Host')
     roomRef.current = room
-    return () => { room.leave(); roomRef.current = null }
+    // Closing the tab or navigating away ends the room right away (best effort:
+    // browsers may skip this on a crash or lost network, in which case peers
+    // notice when the connection drops).
+    const bye = () => { try { room.leave() } catch { /* already gone */ } }
+    window.addEventListener('pagehide', bye)
+    return () => { window.removeEventListener('pagehide', bye); room.leave(); roomRef.current = null }
   }, [roomCode])
 
   const addFiles = useCallback((files: FileList | File[]) => {

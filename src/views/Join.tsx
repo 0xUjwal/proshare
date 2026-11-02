@@ -46,7 +46,7 @@ export function Join({ roomCode }: { roomCode: string }) {
         })
       },
       onLeft: (_id, role) => {
-        if (role === 'host') setNotice('The host left. The session is over - this link will not work anymore.')
+        if (role === 'host') setNotice('The sender closed the room. This session is over and the code no longer works.')
       },
     }, display)
     roomRef.current = room
@@ -110,7 +110,7 @@ export function Join({ roomCode }: { roomCode: string }) {
         <h2 className="text-xl font-bold">{phase === 'connecting' ? 'Opening a secure channel\u2026' : 'Waiting for the sender to approve you\u2026'}</h2>
         <p className="text-[--color-mut] max-w-sm text-sm">
           {noHostHint
-            ? 'No one is hosting this code right now. Check the code with the sender - if they open the room while you wait, you will connect automatically.'
+            ? 'No open room found for this code yet. It may have been closed, not started, or the code may be mistyped. Still checking - if the sender opens the room, you will connect automatically.'
             : 'Keep this tab open. If the sender doesn\'t see your request, double-check the code with them.'}
         </p>
         <Diag get={() => roomRef.current?.diagnostics() ?? null} />
