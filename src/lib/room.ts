@@ -22,7 +22,8 @@ import { MAX_FILE_BYTES, MAX_TEXT_CHARS, sanitizeFilename } from './files'
 
 export const APP_ID = 'proshare-p2p-v1'
 const CHUNK_BYTES = 256 * 1024
-const MAX_WIRE_BYTES = CHUNK_BYTES + 4096 // chunk + AEAD/base64 overhead
+// Chunks travel as base64(iv || AES-GCM ciphertext): 4/3 the raw size plus tag.
+export const MAX_WIRE_BYTES = Math.ceil((CHUNK_BYTES + 28) / 3) * 4 + 64
 export type Role = 'host' | 'guest'
 
 export interface PeerInfo {
