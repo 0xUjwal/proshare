@@ -107,7 +107,7 @@ export function Join({ roomCode }: { roomCode: string }) {
     return (
       <div className="fade-up flex flex-col items-center justify-center flex-1 text-center gap-4">
         <div className="w-12 h-12 rounded-full border-4 border-[--color-line] border-t-[--color-brand] animate-spin" />
-        <h2 className="text-xl font-bold">{phase === 'connecting' ? 'Opening a secure channel&hellip;' : 'Waiting for the sender to approve you&hellip;'}</h2>
+        <h2 className="text-xl font-bold">{phase === 'connecting' ? 'Opening a secure channel\u2026' : 'Waiting for the sender to approve you\u2026'}</h2>
         <p className="text-[--color-mut] max-w-sm text-sm">
           {noHostHint
             ? 'No one is hosting this code right now. Check the code with the sender - if they open the room while you wait, you will connect automatically.'
