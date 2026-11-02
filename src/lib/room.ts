@@ -29,7 +29,9 @@ export const APP_ID = 'proshare-p2p-v1'
 // for every app id; on 2 Nov 2026 several of those (stakey rate-limited,
 // hackshed/flashapp refused connections) were unhealthy, so everyone shared a
 // mostly-dead set. These were checked to accept connections and deliver an
-// event between two sockets. Signaling only - never carries contents.
+// event between two sockets (first six) or accepted a connection (rest). A
+// wider list matters: a phone on mobile data reached only 2 of the first 6
+// while the laptop reached 5, so the two sides need many relays to overlap. Signaling only - never carries contents.
 export const RELAY_URLS = [
   'wss://relay.aarpia.com',
   'wss://nostr.chaima.info',
@@ -37,6 +39,15 @@ export const RELAY_URLS = [
   'wss://nostrcity-club.fly.dev',
   'wss://nostr.christiansass.de',
   'wss://bendernostur.duckdns.org:8443',
+  'wss://nos.lol',
+  'wss://nostr.rblb.it',
+  'wss://relay.agentry.com',
+  'wss://relay.bitmacro.cloud',
+  'wss://relay.nostr.blockhenge.com',
+  'wss://relay.nostrmap.net',
+  'wss://relay.novospes.com',
+  'wss://relay.routstr.com',
+  'wss://testr.nymble.world',
 ]
 
 export interface Diagnostics { relaysOpen: number; relaysTotal: number; stage: string; error: string | null }

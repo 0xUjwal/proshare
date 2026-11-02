@@ -17,6 +17,11 @@ export function Join({ roomCode }: { roomCode: string }) {
   const [text, setText] = useState('')
   const [notice, setNotice] = useState<string | null>(null)
   const [noHostHint, setNoHostHint] = useState(false)
+  const [delivered, setDelivered] = useState(false)
+  useEffect(() => {
+    const t = setInterval(() => setDelivered(/delivered/.test(roomRef.current?.diagnostics().stage ?? '')), 1000)
+    return () => clearInterval(t)
+  }, [])
   const roomRef = useRef<ProShareRoom | null>(null)
 
   const connect = useCallback(() => {
@@ -107,9 +112,9 @@ export function Join({ roomCode }: { roomCode: string }) {
     return (
       <div className="fade-up flex flex-col items-center justify-center flex-1 text-center gap-4">
         <div className="w-12 h-12 rounded-full border-4 border-[--color-line] border-t-[--color-brand] animate-spin" />
-        <h2 className="text-xl font-bold">{phase === 'connecting' ? 'Opening a secure channel\u2026' : 'Waiting for the sender to approve you\u2026'}</h2>
+        <h2 className="text-xl font-bold">{delivered ? 'Waiting for the sender to approve you\u2026' : phase === 'connecting' ? 'Opening a secure channel\u2026' : 'Looking for the sender\u2026'}</h2>
         <p className="text-[--color-mut] max-w-sm text-sm">
-          {noHostHint
+          {noHostHint && !delivered
             ? 'No open room found for this code yet. It may have been closed, not started, or the code may be mistyped. Still checking - if the sender opens the room, you will connect automatically.'
             : 'Keep this tab open. If the sender doesn\'t see your request, double-check the code with them.'}
         </p>
