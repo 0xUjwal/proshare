@@ -6,7 +6,7 @@ import { ProgressBar } from '../components/ProgressBar'
 
 type Phase = 'name' | 'connecting' | 'waiting' | 'connected' | 'declined' | 'failed'
 
-export function Join({ roomId, password }: { roomId: string; password: string }) {
+export function Join({ roomCode }: { roomCode: string }) {
   const [phase, setPhase] = useState<Phase>('name')
   const [name, setName] = useState('')
   const [peers, setPeers] = useState<PeerInfo[]>([])
@@ -14,12 +14,13 @@ export function Join({ roomId, password }: { roomId: string; password: string })
   const [chat, setChat] = useState<ChatMsg[]>([])
   const [text, setText] = useState('')
   const [notice, setNotice] = useState<string | null>(null)
+  const [noHostHint, setNoHostHint] = useState(false)
   const roomRef = useRef<ProShareRoom | null>(null)
 
   const connect = useCallback(() => {
     const display = name.trim().slice(0, 40) || `Guest-${Math.floor(Math.random() * 900 + 100)}`
     setPhase('connecting')
-    const room = ProShareRoom.guest(roomId, password, {
+    const room = ProShareRoom.guest(roomCode, {
       onPending: () => {},
       onPeers: p => { setPeers(p); if (p.length) setPhase('connected') },
       onFileStart: f => setFiles(fs => [...fs.filter(x => x.meta.id !== f.meta.id), f]),
@@ -45,10 +46,12 @@ export function Join({ roomId, password }: { roomId: string; password: string })
       },
     }, display)
     roomRef.current = room
-    // Host approval can take a moment; show a friendly waiting state.
+    // Host approval can take a moment; show a friendly waiting state, and
+    // if nobody is hosting the code at all, say so instead of hanging quietly.
     const t = setTimeout(() => setPhase(p => (p === 'connecting' ? 'waiting' : p)), 4000)
-    return () => clearTimeout(t)
-  }, [name, roomId, password])
+    const t2 = setTimeout(() => setNoHostHint(true), 12000)
+    return () => { clearTimeout(t); clearTimeout(t2) }
+  }, [name, roomCode])
 
   useEffect(() => () => { roomRef.current?.leave(); roomRef.current = null }, [])
 
@@ -67,7 +70,7 @@ export function Join({ roomId, password }: { roomId: string; password: string })
       <div className="fade-up flex flex-col gap-5 max-w-md mx-auto w-full mt-6">
         <div className="text-center">
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">You've been invited</h1>
-          <p className="text-[--color-mut] text-sm mt-2">Someone wants to share with you directly, browser to browser. They will see a request and must approve you.</p>
+          <p className="text-[--color-mut] text-sm mt-2">Someone wants to share with you directly, browser to browser, in room <span className="mono text-[--color-brand2]">{roomCode}</span>. They will see a request and must approve you.</p>
         </div>
         <Card className="flex flex-col gap-3">
           <label className="text-xs font-semibold text-[--color-mut] uppercase tracking-wider">Your name (shown to the host)</label>
@@ -100,8 +103,12 @@ export function Join({ roomId, password }: { roomId: string; password: string })
     return (
       <div className="fade-up flex flex-col items-center justify-center flex-1 text-center gap-4">
         <div className="w-12 h-12 rounded-full border-4 border-[--color-line] border-t-[--color-brand] animate-spin" />
-        <h2 className="text-xl font-bold">{phase === 'connecting' ? 'Opening a secure channel&hellip;' : 'Waiting for the host to approve you&hellip;'}</h2>
-        <p className="text-[--color-mut] max-w-sm text-sm">Keep this tab open. If the host doesn't see your request, double-check the link is complete.</p>
+        <h2 className="text-xl font-bold">{phase === 'connecting' ? 'Opening a secure channel&hellip;' : 'Waiting for the sender to approve you&hellip;'}</h2>
+        <p className="text-[--color-mut] max-w-sm text-sm">
+          {noHostHint
+            ? 'No one is hosting this code right now. Check the code with the sender - if they open the room while you wait, you will connect automatically.'
+            : 'Keep this tab open. If the sender doesn\'t see your request, double-check the code with them.'}
+        </p>
       </div>
     )
   }

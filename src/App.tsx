@@ -16,18 +16,9 @@ export default function App() {
   const parts = hash.replace(/^#\//, '').split('/')
 
   let view
-  if ((parts[0] === 'host' || parts[0] === 'join') && parts[1] && parts[2]) {
-    const props = { roomId: parts[1], password: parts[2] }
-    view = parts[0] === 'host' ? <Host key={hash} {...props} /> : <Join key={hash} {...props} />
-  } else if (parts[0] === 'join' || parts[0] === 'host') {
-    view = (
-      <div className="fade-up flex flex-col items-center justify-center flex-1 text-center gap-4">
-        <div className="text-5xl">&#128683;</div>
-        <h2 className="text-2xl font-bold">That link is incomplete</h2>
-        <p className="text-[--color-mut] max-w-sm">ProShare links carry a long secret after the #. If part of it got cut off, ask for the full link again.</p>
-        <a className="btn btn-ghost" href="#/">Back home</a>
-      </div>
-    )
+  if ((parts[0] === 'host' || parts[0] === 'join') && parts[1]) {
+    const code = decodeURIComponent(parts[1])
+    view = parts[0] === 'host' ? <Host key={hash} roomCode={code} /> : <Join key={hash} roomCode={code} />
   } else {
     view = <Home />
   }

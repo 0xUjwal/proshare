@@ -1,9 +1,11 @@
 // ProShare room layer - wraps Trystero (serverless WebRTC rendezvous).
 //
 // Security properties this layer is built around:
-//  - roomId + password are 256-bit random secrets carried in the URL fragment
-//    (never sent to any HTTP server). Trystero AES-GCM-encrypts SDP signaling
-//    with a key derived from the password as it passes public Nostr relays.
+//  - The room code is a human-typed rendezvous identifier only - never an
+//    encryption key (a 6-digit code would be offline-brute-forceable).
+//  - Each peer pair runs ephemeral ECDH inside the handshake; the derived
+//    key encrypts handshake payloads and yields the verification code that
+//    detects a man-in-the-middle when compared out of band.
 //  - onPeerHandshake = hard admission control: until the host approves, the
 //    pending peer is invisible to all room events and its data is dropped.
 //  - Every reconnection is a new handshake -> approval is never carried over.
@@ -11,8 +13,11 @@
 //    size must be within limits) as defense in depth.
 //  - No TURN servers: file bytes travel direct P2P (DTLS encrypted) and are
 //    never relayed. Downside: restrictive/symmetric NATs can block a pair.
+//  - Signaling itself (SDP offers/answers) passes public Nostr relays in
+//    readable form: relays and anyone who guesses a live code can see
+//    connection metadata (IPs, timing). Never file contents.
 import { joinRoom, selfId, type MessageAction, type Room } from 'trystero'
-import { pairCode, sha256Hex } from './crypto'
+import { deriveSessionKeys, exportPub, generateKxPair, open, seal, sha256Hex, type SessionKeys } from './crypto'
 import { MAX_FILE_BYTES, MAX_TEXT_CHARS, sanitizeFilename } from './files'
 
 export const APP_ID = 'proshare-p2p-v1'
@@ -65,7 +70,7 @@ export interface RoomEvents {
 
 export class ProShareRoom {
   readonly role: Role
-  readonly password: string
+  readonly roomCode: string
   readonly selfId = selfId
   private room: Room
   private peers = new Map<string, PeerInfo>()
@@ -80,23 +85,33 @@ export class ProShareRoom {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private textAction: MessageAction<any>
 
-  private constructor(role: Role, roomId: string, password: string, ev: RoomEvents, myName: string) {
+  private constructor(role: Role, roomCode: string, ev: RoomEvents, myName: string) {
     this.role = role
-    this.password = password
+    this.roomCode = roomCode
     this.ev = ev
 
     this.room = joinRoom(
-      { appId: APP_ID, password, maxReceiveBytes: MAX_FILE_BYTES + 64 * 1024 * 1024 },
-      roomId,
+      { appId: APP_ID, maxReceiveBytes: MAX_FILE_BYTES + 64 * 1024 * 1024 },
+      roomCode,
       {
         handshakeTimeoutMs: 120_000, // a human needs time to approve
         onPeerHandshake: async (peerId, send, receive, isInitiator) => {
-          // Fixed order: initiator speaks first, then both hold a hello.
+          // 1. Ephemeral ECDH key exchange (fixed order: initiator first).
+          const kx = await generateKxPair()
+          const myPub = await exportPub(kx)
+          if (isInitiator) await send({ t: 'kx', pk: myPub })
+          const { data: kxMsg } = await receive()
+          if (!isInitiator) await send({ t: 'kx', pk: myPub })
+          const remotePk = (kxMsg as { t?: string; pk?: string } | undefined)?.pk
+          if ((kxMsg as { t?: string } | undefined)?.t !== 'kx' || typeof remotePk !== 'string') throw new Error('bad handshake')
+          const session: SessionKeys = await deriveSessionKeys(kx.privateKey, remotePk, this.selfId, peerId)
+
+          // 2. Encrypted hello exchange. A tampered payload fails GCM.
           const hello = { t: 'hello', role, name: myName.slice(0, 40) }
-          if (isInitiator) await send(hello)
+          if (isInitiator) await send(await seal(session.encKey, hello))
           const { data: remote } = await receive()
-          if (!isInitiator) await send(hello)
-          const h = remote as Partial<typeof hello> | undefined
+          if (!isInitiator) await send(await seal(session.encKey, hello))
+          const h = (await open(session.encKey, remote)) as Partial<typeof hello> | undefined
           if (!h || h.t !== 'hello' || typeof h.name !== 'string') throw new Error('bad handshake')
           if (h.role === role) throw new Error('same-role peers are not allowed')
           const name = String(h.name).slice(0, 40) || 'Guest'
@@ -105,22 +120,23 @@ export class ProShareRoom {
             // A peer the host rejected keeps retrying at the relay level;
             // auto-reject repeats this session without re-prompting the human.
             if (this.rejected.has(peerId)) {
-              await send({ t: 'reject' }).catch(() => {})
+              await send(await seal(session.encKey, { t: 'reject' })).catch(() => {})
               throw new Error('previously declined')
             }
             // Host decides. Ask the human. Requests are queued so two
             // simultaneous joiners never overwrite each other's prompt.
             const approved = await this.enqueuePending(peerId, name)
-            await send({ t: approved ? 'accept' : 'reject' })
+            await send(await seal(session.encKey, { t: approved ? 'accept' : 'reject' }))
             if (!approved) {
               this.rejected.add(peerId)
               throw new Error('declined by host')
             }
-            await this.addPeer(peerId, name, 'guest')
+            await this.addPeer(peerId, name, 'guest', session.verifyCode)
           } else {
             const { data: verdict } = await receive()
-            if ((verdict as { t?: string } | undefined)?.t !== 'accept') throw new Error('declined by host')
-            await this.addPeer(peerId, name, 'host')
+            const v = (await open(session.encKey, verdict)) as { t?: string } | undefined
+            if (v?.t !== 'accept') throw new Error('declined by host')
+            await this.addPeer(peerId, name, 'host', session.verifyCode)
           }
         },
         onJoinError: ({ error }) => {
@@ -208,11 +224,11 @@ export class ProShareRoom {
 
   private pendingMeta = new Map<string, FileMeta>()
 
-  static host(roomId: string, password: string, ev: RoomEvents, name: string) {
-    return new ProShareRoom('host', roomId, password, ev, name)
+  static host(roomCode: string, ev: RoomEvents, name: string) {
+    return new ProShareRoom('host', roomCode, ev, name)
   }
-  static guest(roomId: string, password: string, ev: RoomEvents, name: string) {
-    return new ProShareRoom('guest', roomId, password, ev, name)
+  static guest(roomCode: string, ev: RoomEvents, name: string) {
+    return new ProShareRoom('guest', roomCode, ev, name)
   }
 
   private enqueuePending(peerId: string, name: string): Promise<boolean> {
@@ -241,8 +257,8 @@ export class ProShareRoom {
     this.ev.onPending(this.pendingActive)
   }
 
-  private async addPeer(id: string, name: string, role: Role) {
-    this.peers.set(id, { id, name, role, code: await pairCode(this.password, this.selfId, id), connectedAt: Date.now() })
+  private async addPeer(id: string, name: string, role: Role, code: string) {
+    this.peers.set(id, { id, name, role, code, connectedAt: Date.now() })
     this.emitPeers()
   }
 

@@ -2,14 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ProShareRoom, type ChatMsg, type FileMeta, type PeerInfo, type PendingRequest } from '../lib/room'
 import { randomToken, sha256Hex } from '../lib/crypto'
 import { MAX_FILE_BYTES, MAX_FILES, MAX_TEXT_CHARS, formatBytes } from '../lib/files'
+import { formatCode } from '../lib/codes'
 import { Card } from '../components/Chrome'
 import { Qr } from '../components/Qr'
 import { ProgressBar } from '../components/ProgressBar'
 
 interface Outgoing { meta: FileMeta; target: string; targetName: string; progress: number; status: 'sending' | 'done' | 'failed'; error?: string }
 
-export function Host({ roomId, password }: { roomId: string; password: string }) {
-  const [joinLink] = useState(() => `${location.origin}${location.pathname}#/join/${roomId}/${password}`)
+export function Host({ roomCode }: { roomCode: string }) {
+  const [joinLink] = useState(() => `${location.origin}${location.pathname}#/join/${encodeURIComponent(roomCode)}`)
   const [pending, setPending] = useState<PendingRequest | null>(null)
   const [peers, setPeers] = useState<PeerInfo[]>([])
   const [picked, setPicked] = useState<File[]>([])
@@ -23,7 +24,7 @@ export function Host({ roomId, password }: { roomId: string; password: string })
   const roomRef = useRef<ProShareRoom | null>(null)
 
   useEffect(() => {
-    const room = ProShareRoom.host(roomId, password, {
+    const room = ProShareRoom.host(roomCode, {
       onPending: setPending,
       onPeers: setPeers,
       onFileStart: () => {}, // hosts send; guests receive
@@ -31,12 +32,15 @@ export function Host({ roomId, password }: { roomId: string; password: string })
       onFileDone: () => {},
       onText: m => setChat(c => [...c.slice(-99), m]),
       onError: setNotice,
-      onJoinError: () => {},
+      onJoinError: msg => {
+        // Another live host claimed the same code - tell the sender to pick another.
+        if (/same-role/i.test(msg)) setNotice('That code is already in use by another open room. Go back and choose a different one.')
+      },
       onLeft: (_id, role) => { if (role === 'guest') setNotice('A peer left the session.') },
     }, 'Host')
     roomRef.current = room
     return () => { room.leave(); roomRef.current = null }
-  }, [roomId, password])
+  }, [roomCode])
 
   const addFiles = useCallback((files: FileList | File[]) => {
     const list = [...files]
@@ -98,7 +102,7 @@ export function Host({ roomId, password }: { roomId: string; password: string })
       <div className="fade-up flex flex-col items-center justify-center flex-1 text-center gap-4">
         <div className="text-5xl">&#128274;</div>
         <h2 className="text-2xl font-bold">Session ended</h2>
-        <p className="text-[--color-mut] max-w-sm">The room is closed and the link no longer works. Start a new session to share again.</p>
+        <p className="text-[--color-mut] max-w-sm">The room is closed and its code no longer connects to you. Start a new session to share again.</p>
         <a className="btn btn-primary" href="#/">New session</a>
       </div>
     )
@@ -107,8 +111,8 @@ export function Host({ roomId, password }: { roomId: string; password: string })
   return (
     <div className="fade-up flex flex-col gap-5">
       <div className="flex flex-col gap-1">
-        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Your private room is ready</h1>
-        <p className="text-[--color-mut] text-sm">Share the link with one person. They ask to join, you approve, then send. Nothing uploads anywhere.</p>
+        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Your room is open</h1>
+        <p className="text-[--color-mut] text-sm">Share the code or link. They ask to join, you approve, then send. Keep this tab open - closing it ends the room.</p>
       </div>
 
       {notice && (
@@ -121,13 +125,15 @@ export function Host({ roomId, password }: { roomId: string; password: string })
       <Card>
         <div className="flex flex-col sm:flex-row gap-5 sm:items-center">
           <div className="flex-1 min-w-0">
-            <div className="text-xs font-semibold text-[--color-mut] uppercase tracking-wider mb-2">Invite link (contains the room key)</div>
+            <div className="text-xs font-semibold text-[--color-mut] uppercase tracking-wider mb-2">Room code</div>
+            <div className="mono text-3xl sm:text-4xl font-bold tracking-[0.2em] text-[--color-brand2] select-all">{formatCode(roomCode)}</div>
+            <div className="text-xs font-semibold text-[--color-mut] uppercase tracking-wider mt-4 mb-2">Or share the link</div>
             <div className="mono text-xs sm:text-sm break-all bg-[--color-panel2] border border-[--color-line] rounded-xl p-3 select-all">{joinLink}</div>
             <div className="flex gap-2 mt-3 flex-wrap">
               <button className="btn btn-primary" onClick={copyLink}>{linkCopied ? 'Copied' : 'Copy link'}</button>
               <button className="btn btn-danger" onClick={endSession}>End session</button>
             </div>
-            <p className="text-xs text-[--color-mut] mt-3">Anyone with this link can <i>ask</i> to join - nobody gets in without your approval. Treat it like a key.</p>
+            <p className="text-xs text-[--color-mut] mt-3">Anyone with the code can <i>ask</i> to join - nobody gets in without your approval, and nothing transfers until you send it.</p>
           </div>
           <div className="self-center"><Qr value={joinLink} /></div>
         </div>
@@ -138,7 +144,7 @@ export function Host({ roomId, password }: { roomId: string; password: string })
           <div className="flex flex-col sm:flex-row sm:items-center gap-4">
             <div className="flex-1">
               <div className="font-semibold text-lg">Join request</div>
-              <p className="text-sm text-[--color-mut]"><b className="text-white">{pending.name}</b> is asking to connect. Only approve if you just shared the link with them.</p>
+              <p className="text-sm text-[--color-mut]"><b className="text-white">{pending.name}</b> is asking to connect. Only approve if you just shared the code with them.</p>
             </div>
             <div className="flex gap-2">
               <button className="btn btn-ok" onClick={() => pending.resolve(true)}>Approve</button>

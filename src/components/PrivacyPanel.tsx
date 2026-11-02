@@ -7,11 +7,11 @@ export function PrivacyPanel() {
       </summary>
       <ul className="mt-3 space-y-2 text-[--color-mut] leading-relaxed list-disc pl-5">
         <li><b className="text-white">Files and text never touch a server.</b> They travel directly between the two browsers over an encrypted WebRTC channel. There is nothing to breach on our side because nothing is stored on our side.</li>
-        <li><b className="text-white">Only people with your full link can connect.</b> The link carries a long random secret in its <span className="mono">#fragment</span>, which browsers never send to any web server. Anyone you share it with can request to join - you approve each person explicitly.</li>
-        <li><b className="text-white">Finding each other needs a public bulletin board.</b> To connect the two browsers, ProShare posts encrypted connection details to public Nostr relays. Those relays can see that two IPs connected at a time - not what was shared. Their log retention is outside our control.</li>
+        <li><b className="text-white">The code is an address, not a key.</b> Anyone who knows a live room code can request to join - the sender approves each person explicitly, and nothing transfers without approval. Codes are never used as encryption keys (a 6-digit code would be guessable). Each connection creates its own fresh encryption keys.</li>
+        <li><b className="text-white">Finding each other needs a public bulletin board.</b> To connect the two browsers, ProShare posts connection details to public Nostr relays. Those relays - and anyone who guesses a live code - can see connection metadata (IP addresses, timing), never file contents. Relay log retention is outside our control.</li>
+        <li><b className="text-white">Compare the 6-digit verification code.</b> It is created fresh for each connection from keys only your two devices hold. If a third party wedged itself between you, the codes would not match - compare them over a call or another chat.</li>
         <li><b className="text-white">No analytics, no trackers, no ads, no accounts.</b> This site loads no third-party scripts and sets no cookies.</li>
         <li><b className="text-white">Limits, honestly:</b> files are held in memory while transferring, so very large files can strain weak devices. Connections can fail on some restrictive corporate or mobile networks because there is no relay fallback by design. Closing either tab ends the session.</li>
-        <li><b className="text-white">Verify your peer.</b> Compare the 6-digit code shown on both screens over a call or another chat to confirm you are connected to the right person.</li>
       </ul>
     </details>
   )
