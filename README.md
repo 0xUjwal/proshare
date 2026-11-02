@@ -25,6 +25,16 @@ devices over an encrypted WebRTC channel - they are never uploaded to, or stored
 
 ## Limits (honest ones)
 
+- **The link is the capability.** Anyone holding the full link can request to join while the
+  host session is live; the host approves every join individually, and guests cannot exchange
+  files or text with each other in the unmodified app. A peer running a deliberately modified
+  client shares the same rendezvous secret and could bypass client-side role checks - that is
+  inherent to shared-secret rendezvous without accounts. The 6-digit verification code shown
+  to both sides is the out-of-band check that you are talking to the person you expect.
+- **End session is final.** Closing the host or pressing End session leaves the room; the old
+  link is dead and rejoining it fails with a connection error. Only a new session (new link)
+  works.
+
 - Received files are held in memory before saving; very large files can strain low-memory
   devices. Per-file limit is 1 GiB.
 - Without a TURN relay, connections can fail behind restrictive corporate or mobile networks.
