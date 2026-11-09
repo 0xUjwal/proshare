@@ -25,6 +25,25 @@ export type { FileMeta } from './transfer'
 
 export const APP_ID = 'proshare-p2p-v1'
 
+// ICE servers. STUN is always on. TURN (relay fallback for devices on different
+// networks, e.g. laptop on Wi-Fi + phone on mobile data) is added only when
+// VITE_METERED_APP and VITE_METERED_KEY are set at build time. Relayed bytes
+// are still end-to-end encrypted (DTLS + our AEAD layer): the relay sees ciphertext.
+export const STUN_URLS = ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478']
+export async function loadIceServers(): Promise<RTCIceServer[]> {
+  const base: RTCIceServer[] = [{ urls: STUN_URLS }]
+  const app = import.meta.env.VITE_METERED_APP as string | undefined
+  const key = import.meta.env.VITE_METERED_KEY as string | undefined
+  if (!app || !key) return base
+  try {
+    const r = await fetch(`https://${encodeURIComponent(app)}.metered.live/api/v1/turn/credentials?apiKey=${encodeURIComponent(key)}`)
+    if (!r.ok) return base
+    const list = (await r.json()) as RTCIceServer[]
+    return Array.isArray(list) ? [...base, ...list] : base
+  } catch { return base }
+}
+export const turnConfigured = (): boolean => !!(import.meta.env.VITE_METERED_APP && import.meta.env.VITE_METERED_KEY)
+
 // Rendezvous relays. Trystero's default is a fixed shuffle of 5 public relays
 // for every app id; on 2 Nov 2026 several of those (stakey rate-limited,
 // hackshed/flashapp refused connections) were unhealthy, so everyone shared a
@@ -41,6 +60,14 @@ export const RELAY_URLS = [
 
 export interface Diagnostics { relaysOpen: number; relaysTotal: number; stage: string; error: string | null }
 export type Role = 'host' | 'guest'
+const PAIR_PREFIX = '\u0001proshare-pair:'
+async function pairMac(secretB64: string, a: string, b: string): Promise<string> {
+  const raw = Uint8Array.from(atob(secretB64), c => c.charCodeAt(0))
+  const key = await crypto.subtle.importKey('raw', raw, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+  const msg = new TextEncoder().encode(['proshare-pair-auth-v1', ...[a, b].sort()].join('|'))
+  const sig = new Uint8Array(await crypto.subtle.sign('HMAC', key, msg))
+  return btoa(String.fromCharCode(...sig))
+}
 
 export interface PeerInfo {
   id: string
@@ -82,6 +109,8 @@ export interface RoomEvents {
   onError: (msg: string) => void
   onJoinError: (msg: string) => void
   onLeft: (peerId: string, role: Role | null) => void
+  // Remote pairing control ("offer:<secret>" or "ok"); only delivered after mutual code confirmation.
+  onPair?: (payload: string, peer: PeerInfo) => void
 }
 
 export class ProShareRoom {
@@ -96,6 +125,8 @@ export class ProShareRoom {
   private sessions = new Map<string, { sender: ContentSender; receiver: ContentReceiver; gate: ConfirmGate }>()
   private ev: RoomEvents
   private closed = false
+  private nearby = false
+  private pairSecret?: string
   private stage = 'looking for the other device'
   private hsError: string | null = null
 
@@ -106,13 +137,15 @@ export class ProShareRoom {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private ctrlAction: MessageAction<any>
 
-  private constructor(role: Role, roomCode: string, ev: RoomEvents, myName: string) {
+  private constructor(role: Role, roomCode: string, ev: RoomEvents, myName: string, iceServers: RTCIceServer[] = [{ urls: STUN_URLS }], opts: { nearby?: boolean; pairSecret?: string } = {}) {
+    this.nearby = !!opts.nearby
+    this.pairSecret = opts.pairSecret
     this.role = role
     this.roomCode = roomCode
     this.ev = ev
 
     this.room = joinRoom(
-      { appId: APP_ID, maxReceiveBytes: 1024 * 1024 * 1024 + 64 * 1024 * 1024, relayConfig: { urls: RELAY_URLS } },
+      { appId: APP_ID, maxReceiveBytes: 1024 * 1024 * 1024 + 64 * 1024 * 1024, relayConfig: { urls: RELAY_URLS }, rtcConfig: { iceServers } },
       roomCode,
       {
         handshakeTimeoutMs: 120_000, // a human needs time to approve
@@ -127,20 +160,31 @@ export class ProShareRoom {
           if (!isInitiator) await send({ t: 'kx', pk: myPub })
           const remotePk = (kxMsg as { t?: string; pk?: string } | undefined)?.pk
           if ((kxMsg as { t?: string } | undefined)?.t !== 'kx' || typeof remotePk !== 'string') throw new Error('bad handshake')
-          const session: SessionKeys = await deriveSessionKeys(kx.privateKey, remotePk, this.selfId, peerId, role)
+          // Nearby mode is symmetric: each pair picks roles deterministically from ids.
+          const pairRole: Role = this.nearby ? (this.selfId < peerId ? 'host' : 'guest') : role
+          const session: SessionKeys = await deriveSessionKeys(kx.privateKey, remotePk, this.selfId, peerId, pairRole)
 
           // 2. Encrypted hello exchange. A tampered payload fails GCM.
-          const hello = { t: 'hello', role, name: myName.slice(0, 40) }
+          const hello = { t: 'hello', role: pairRole, name: myName.slice(0, 40) }
           if (isInitiator) await send(await seal(session.hsKey, hello))
           const { data: remote } = await receive()
           if (!isInitiator) await send(await seal(session.hsKey, hello))
           const h = (await open(session.hsKey, remote)) as Partial<typeof hello> | undefined
           if (!h || h.t !== 'hello' || typeof h.name !== 'string') throw new Error('bad handshake')
-          if (h.role === role) throw new Error('same-role peers are not allowed')
+          if (h.role === pairRole) throw new Error('same-role peers are not allowed')
           const name = String(h.name).slice(0, 40) || 'Guest'
-          this.stage = role === 'host' ? 'request received' : 'request delivered, waiting for approval'
+          // Paired rooms: both sides prove knowledge of the pair secret over the exact
+          // key exchange, which defeats a man in the middle (including a relay).
+          if (this.pairSecret) {
+            const mine = await pairMac(this.pairSecret, myPub, remotePk)
+            if (isInitiator) await send({ t: 'pa', m: mine })
+            const { data: pa } = await receive()
+            if (!isInitiator) await send({ t: 'pa', m: mine })
+            if ((pa as { m?: string } | undefined)?.m !== mine) throw new Error('pair authentication failed')
+          }
+          this.stage = pairRole === 'host' ? 'request received' : 'request delivered, waiting for approval'
 
-          if (role === 'host') {
+          if (pairRole === 'host') {
             // A peer the host rejected keeps retrying at the relay level;
             // auto-reject repeats this session without re-prompting the human.
             if (this.rejected.has(peerId)) {
@@ -149,7 +193,8 @@ export class ProShareRoom {
             }
             // Host decides. Ask the human. Requests are queued so two
             // simultaneous joiners never overwrite each other's prompt.
-            const approved = await this.enqueuePending(peerId, name)
+            // Nearby: no join prompt. Safety is the per-pair code match, which gates all content.
+            const approved = this.nearby ? true : await this.enqueuePending(peerId, name)
             await send(await seal(session.hsKey, { t: approved ? 'accept' : 'reject' }))
             if (!approved) {
               this.rejected.add(peerId)
@@ -161,6 +206,13 @@ export class ProShareRoom {
             const v = (await open(session.hsKey, verdict)) as { t?: string } | undefined
             if (v?.t !== 'accept') throw new Error('declined by host')
             await this.addPeer(peerId, name, 'host', session)
+          }
+          if (this.pairSecret) {
+            // Both sides have registered the session; now confirm automatically.
+            if (isInitiator) await send({ t: 'ready' })
+            await receive()
+            if (!isInitiator) await send({ t: 'ready' })
+            setTimeout(() => { this.confirmPeer(peerId).catch(() => {}) }, 300)
           }
         },
         onJoinError: ({ error }) => {
@@ -226,6 +278,11 @@ export class ProShareRoom {
       const peer = this.peers.get(peerId)
       if (!sess || !peer) return
       for (const ev of await sess.receiver.acceptText(data)) {
+        if (ev.type === 'text' && ev.text.startsWith(PAIR_PREFIX)) {
+          const peerNow = this.peers.get(peerId)
+          if (peerNow && peerMutual(peerNow) && !this.pairSecret) this.ev.onPair?.(ev.text.slice(PAIR_PREFIX.length), peerNow)
+          continue
+        }
         if (ev.type === 'text') this.ev.onText({ id: ev.id || String(Math.random()), from: peerId, name: peer.name, text: ev.text, ts: ev.ts })
       }
     }
@@ -256,11 +313,19 @@ export class ProShareRoom {
     return { relaysOpen: open, relaysTotal: total, stage: this.stage, error: this.hsError }
   }
 
-  static host(roomCode: string, ev: RoomEvents, name: string) {
-    return new ProShareRoom('host', roomCode, ev, name)
+  static host(roomCode: string, ev: RoomEvents, name: string, ice?: RTCIceServer[]) {
+    return new ProShareRoom('host', roomCode, ev, name, ice)
   }
-  static guest(roomCode: string, ev: RoomEvents, name: string) {
-    return new ProShareRoom('guest', roomCode, ev, name)
+  static guest(roomCode: string, ev: RoomEvents, name: string, ice?: RTCIceServer[]) {
+    return new ProShareRoom('guest', roomCode, ev, name, ice)
+  }
+  // Auto-discovery room: every device on the same public IP joins the same room.
+  static nearby(roomName: string, ev: RoomEvents, name: string, ice?: RTCIceServer[]) {
+    return new ProShareRoom('host', roomName, ev, name, ice, { nearby: true })
+  }
+  // A room only paired devices know: room name and handshake auth derive from a shared secret.
+  static paired(roomName: string, secret: string, ev: RoomEvents, name: string, ice?: RTCIceServer[]) {
+    return new ProShareRoom('host', roomName, ev, name, ice, { nearby: true, pairSecret: secret })
   }
 
   private enqueuePending(peerId: string, name: string): Promise<boolean> {
@@ -315,7 +380,7 @@ export class ProShareRoom {
   }
 
   approvedPeerIds(): string[] {
-    return [...this.peers.values()].filter(p => (this.role === 'host' ? p.role === 'guest' : p.role === 'host')).map(p => p.id)
+    return [...this.peers.values()].filter(p => this.nearby || (this.role === 'host' ? p.role === 'guest' : p.role === 'host')).map(p => p.id)
   }
 
   async sendFile(peerId: string, file: File, meta: FileMeta, onProgress: (p: number) => void): Promise<void> {
@@ -342,6 +407,13 @@ export class ProShareRoom {
       if (!(sess.gate.local && sess.gate.remote)) throw new Error('both sides must confirm the verification code before anything is sent')
       await this.textAction.send(await sess.sender.sealText(crypto.randomUUID(), text, Date.now()), { target: t })
     }
+  }
+
+  // Send a pairing control message (sealed like any content, only after code confirmation).
+  async sendPair(peerId: string, payload: string): Promise<void> {
+    const sess = this.sessions.get(peerId)
+    if (!sess || !(sess.gate.local && sess.gate.remote)) throw new Error('confirm the verification code first')
+    await this.textAction.send(await sess.sender.sealText(crypto.randomUUID(), PAIR_PREFIX + payload, Date.now()), { target: peerId })
   }
 
   leave() {

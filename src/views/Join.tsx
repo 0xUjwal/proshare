@@ -5,6 +5,7 @@ import { ProShareRoom, peerMutual, type ChatMsg, type IncomingFile, type PeerInf
 import { MAX_TEXT_CHARS, formatBytes, saveBlob } from '../lib/files'
 import { Card } from '../components/Chrome'
 import { ProgressBar } from '../components/ProgressBar'
+import { deviceName, savePair } from '../lib/pairs'
 
 type Phase = 'name' | 'connecting' | 'waiting' | 'connected' | 'declined' | 'failed'
 
@@ -24,9 +25,11 @@ export function Join({ roomCode }: { roomCode: string }) {
     return () => clearInterval(t)
   }, [])
   const roomRef = useRef<ProShareRoom | null>(null)
+  const [offer, setOffer] = useState<{ secret: string; name: string; peerId: string } | null>(null)
+  const [paired, setPaired] = useState(false)
 
   const connect = useCallback(() => {
-    const display = name.trim().slice(0, 40) || `Guest-${Math.floor(Math.random() * 900 + 100)}`
+    const display = name.trim().slice(0, 40) || deviceName()
     setPhase('connecting')
     const room = ProShareRoom.guest(roomCode, {
       onPending: () => {},
@@ -40,6 +43,7 @@ export function Join({ roomCode }: { roomCode: string }) {
         // memory until the user presses its download icon.
       },
       onText: m => setChat(c => [...c.slice(-99), m]),
+      onPair: (payload, peer) => { if (payload.startsWith('offer:')) setOffer({ secret: payload.slice(6), name: peer.name, peerId: peer.id }) },
       onError: setNotice,
       onJoinError: msg => {
         // Same-role rejections are other guests bumping into us, not a host
@@ -155,6 +159,18 @@ export function Join({ roomCode }: { roomCode: string }) {
           <button className="text-[--color-mut] hover:text-white" onClick={() => setNotice(null)} aria-label="dismiss">&#10005;</button>
         </div>
       )}
+
+      {offer && !paired && (
+        <Card className="pulse-ring border-[--color-brand] flex flex-col gap-2">
+          <div className="font-semibold">{offer.name} wants to pair with this device</div>
+          <p className="text-sm text-[--color-mut]">Pairing lets you two find each other automatically on any network. Only accept if this is your own device.</p>
+          <div className="flex gap-2">
+            <button className="btn btn-ok" onClick={() => { savePair(offer.name, offer.secret); roomRef.current?.sendPair(offer.peerId, 'ok').catch(() => {}); setPaired(true) }}>Pair</button>
+            <button className="btn btn-ghost" onClick={() => setOffer(null)}>Not now</button>
+          </div>
+        </Card>
+      )}
+      {paired && <Card><p className="text-sm text-[--color-ok]">Paired. Open <a className="underline" href="#/devices">My devices</a> any time.</p></Card>}
 
       <Card>
         <div className="text-xs font-semibold text-[--color-mut] uppercase tracking-wider mb-3">Incoming files</div>

@@ -90,3 +90,13 @@ npm run dev     # local dev server
 npm run build   # static build into dist/
 npx tsx --test tests/*.test.mts   # unit tests
 ```
+
+
+## My devices (LocalSend / PairDrop style)
+
+Open `#/devices` on both devices.
+
+- **Nearby:** devices behind the same router (same public IPv4) find each other with no code. The room name is a hash of that IP. Each pair must still compare a 6-digit code before anything is sent, because other people on the same network (an office, a cafe) land in the same room.
+- **Paired:** pair once through the 6-digit Send/Receive flow, then press "Remember this device". Both browsers keep a random 256-bit secret in localStorage. The relay room and a handshake MAC derive from it, so only the two paired browsers connect, with no code compare, on any network.
+- Optional TURN relay for devices on different networks: set `VITE_METERED_APP` and `VITE_METERED_KEY` at build time (Metered credentials endpoint). Without them only STUN is used.
+- Limits: the pair secret sits in localStorage (clearing site data unpairs; XSS would expose it). Discovery uses a public IP lookup (ipify) and public Nostr relays for signalling. Not independently audited.

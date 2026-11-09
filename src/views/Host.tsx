@@ -7,6 +7,7 @@ import { MAX_FILE_BYTES, MAX_FILES, MAX_TEXT_CHARS, formatBytes } from '../lib/f
 import { formatCode } from '../lib/codes'
 import { Card } from '../components/Chrome'
 import { Qr } from '../components/Qr'
+import { deviceName, newSecret, savePair } from '../lib/pairs'
 import { ProgressBar } from '../components/ProgressBar'
 
 interface Outgoing { meta: FileMeta; target: string; targetName: string; progress: number; status: 'sending' | 'done' | 'failed'; error?: string }
@@ -24,6 +25,8 @@ export function Host({ roomCode }: { roomCode: string }) {
   const [drag, setDrag] = useState(false)
   const [text, setText] = useState('')
   const roomRef = useRef<ProShareRoom | null>(null)
+  const pairSecretRef = useRef<string | null>(null)
+  const [pairState, setPairState] = useState<'idle' | 'asked' | 'saved'>('idle')
 
   const guests = useMemo(() => peers.filter(p => p.role === 'guest'), [peers])
 
@@ -36,6 +39,9 @@ export function Host({ roomCode }: { roomCode: string }) {
       onFileProgress: () => {},
       onFileDone: () => {},
       onText: m => setChat(c => [...c.slice(-99), m]),
+      onPair: (payload, peer) => {
+        if (payload === 'ok' && pairSecretRef.current) { savePair(peer.name, pairSecretRef.current); pairSecretRef.current = null; setPairState('saved') }
+      },
       onError: setNotice,
       onJoinError: msg => {
         // Another live host claimed the same code - tell the sender to pick another.
@@ -44,7 +50,7 @@ export function Host({ roomCode }: { roomCode: string }) {
       onLeft: (_id, role) => {
         if (role === 'guest') setNotice('A peer left the session.')
       },
-    }, 'Host')
+    }, deviceName())
     roomRef.current = room
     // Closing the tab or navigating away ends the room right away (best effort:
     // browsers may skip this on a crash or lost network, in which case peers
@@ -104,6 +110,15 @@ export function Host({ roomCode }: { roomCode: string }) {
     catch { setNotice('Clipboard blocked - long-press the link to copy it.') }
   }, [joinLink])
 
+  const offerPair = useCallback(async (peerId: string) => {
+    const room = roomRef.current
+    if (!room) return
+    const secret = newSecret()
+    pairSecretRef.current = secret
+    try { await room.sendPair(peerId, 'offer:' + secret); setPairState('asked') }
+    catch { setNotice('Could not ask - confirm the verification code on both sides first.') }
+  }, [])
+
   const endSession = useCallback(() => {
     roomRef.current?.leave()
     setEnded(true)
@@ -132,6 +147,16 @@ export function Host({ roomCode }: { roomCode: string }) {
           <span>{notice}</span>
           <button className="text-[--color-mut] hover:text-white" onClick={() => setNotice(null)} aria-label="dismiss">&#10005;</button>
         </div>
+      )}
+
+      {guests.filter(peerMutual).length === 1 && (
+        <Card className="flex flex-col gap-2">
+          <div className="font-semibold">Remember {guests.filter(peerMutual)[0].name}?</div>
+          <p className="text-sm text-[--color-mut]">Pair these two devices so they find each other automatically next time, on any network, with no code.</p>
+          {pairState === 'idle' && <button className="btn btn-primary" onClick={() => offerPair(guests.filter(peerMutual)[0].id)}>Remember this device</button>}
+          {pairState === 'asked' && <p className="text-sm text-[--color-warn]">Waiting for them to accept on their device&hellip;</p>}
+          {pairState === 'saved' && <p className="text-sm text-[--color-ok]">Paired. Open <a className="underline" href="#/devices">My devices</a> any time.</p>}
+        </Card>
       )}
 
       <Card>

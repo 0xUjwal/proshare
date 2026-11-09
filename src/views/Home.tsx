@@ -3,7 +3,7 @@ import { Card } from '../components/Chrome'
 import { PrivacyPanel } from '../components/PrivacyPanel'
 import { autoCode, isValidCode, normalizeCode, weakCodeWarning } from '../lib/codes'
 
-export function Home() {
+export function Home({ pairMode = false }: { pairMode?: boolean }) {
   const [sendCode, setSendCode] = useState('')
   const [joinCode, setJoinCode] = useState('')
   const [err, setErr] = useState<string | null>(null)
@@ -37,6 +37,18 @@ export function Home() {
           One of you opens a room and shares its code. The other enters the code, the sender approves,
           and files travel straight between your devices over an encrypted channel.
         </p>
+      </section>
+
+      <section className="max-w-2xl mx-auto w-full">
+        <Card className="flex flex-col gap-3 items-center text-center">
+          <h2 className="text-lg font-bold">{pairMode ? 'Pair a new device' : 'My devices'}</h2>
+          <p className="text-sm text-[--color-mut]">
+            {pairMode
+              ? 'Pair once with a 6-digit code below: one device creates a room, the other joins it, you both confirm the code, then press "Remember this device". After that they find each other automatically.'
+              : 'Laptop and phone: open ProShare on both. Devices on the same Wi-Fi show up by themselves, and paired devices show up on any network.'}
+          </p>
+          {!pairMode && <a className="btn btn-primary w-full" href="#/devices">Open My devices</a>}
+        </Card>
       </section>
 
       <section className="grid sm:grid-cols-2 gap-4 max-w-2xl mx-auto w-full">

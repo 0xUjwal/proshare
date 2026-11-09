@@ -3,6 +3,7 @@ import { Shell } from './components/Chrome'
 import { Home } from './views/Home'
 import { Host } from './views/Host'
 import { Join } from './views/Join'
+import { Devices } from './views/Devices'
 
 function useHash(): string {
   return useSyncExternalStore(
@@ -19,8 +20,10 @@ export default function App() {
   if ((parts[0] === 'host' || parts[0] === 'join') && parts[1]) {
     const code = decodeURIComponent(parts[1])
     view = parts[0] === 'host' ? <Host key={hash} roomCode={code} /> : <Join key={hash} roomCode={code} />
+  } else if (parts[0] === 'devices') {
+    view = <Devices key={hash} />
   } else {
-    view = <Home />
+    view = <Home pairMode={parts[0] === 'pair'} />
   }
 
   return <Shell>{view}</Shell>
