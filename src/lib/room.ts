@@ -32,8 +32,8 @@ export const APP_ID = 'proshare-p2p-v1'
 export const STUN_URLS = ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478']
 export async function loadIceServers(): Promise<RTCIceServer[]> {
   const base: RTCIceServer[] = [{ urls: STUN_URLS }]
-  const app = import.meta.env.VITE_METERED_APP as string | undefined
-  const key = import.meta.env.VITE_METERED_KEY as string | undefined
+  const app = (import.meta.env.VITE_METERED_APP as string | undefined)?.trim()
+  const key = (import.meta.env.VITE_METERED_KEY as string | undefined)?.trim()
   if (!app || !key) return base
   try {
     const r = await fetch(`https://${encodeURIComponent(app)}.metered.live/api/v1/turn/credentials?apiKey=${encodeURIComponent(key)}`)
@@ -42,7 +42,7 @@ export async function loadIceServers(): Promise<RTCIceServer[]> {
     return Array.isArray(list) ? [...base, ...list] : base
   } catch { return base }
 }
-export const turnConfigured = (): boolean => !!(import.meta.env.VITE_METERED_APP && import.meta.env.VITE_METERED_KEY)
+export const turnConfigured = (): boolean => !!((import.meta.env.VITE_METERED_APP as string | undefined)?.trim() && (import.meta.env.VITE_METERED_KEY as string | undefined)?.trim())
 
 // Rendezvous relays. Trystero's default is a fixed shuffle of 5 public relays
 // for every app id; on 2 Nov 2026 several of those (stakey rate-limited,
